@@ -163,19 +163,19 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 fn fft_gpu<F: PrimeField>(a: &mut [F], omega: F, log_n: u32) {
-    use ec_gpu_gen::{
-        fft::FftKernel,
-        rust_gpu_tools::Device,
-    };
+    use ec_gpu_gen::{fft::FftKernel, rust_gpu_tools::Device};
 
     let devices = Device::all();
     let programs = devices
         .iter()
         .map(|device| ec_gpu_gen::program!(device))
-        .collect::<Result<_, _>>().unwrap();
+        .collect::<Result<_, _>>()
+        .unwrap();
     let mut kernel = FftKernel::create(programs).unwrap();
 
-    kernel.radix_fft_many(&mut [a][..], &[omega], &[log_n]).unwrap();
+    kernel
+        .radix_fft_many(&mut [a][..], &[omega], &[log_n])
+        .unwrap();
 }
 
 #[cfg(not(any(feature = "cuda", feature = "opencl")))]
@@ -193,7 +193,6 @@ pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
         // GPU code.
         let a = unsafe { &mut *(a as *mut [G] as *mut [G::Scalar]) };
         fft_gpu(a, omega, log_n)
-
     } else {
         best_fft_halo2(a, omega, log_n)
     }
