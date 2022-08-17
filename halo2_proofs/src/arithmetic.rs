@@ -1,12 +1,20 @@
 //! This module provides common utilities, traits and structures for group,
 //! field and polynomial arithmetic.
+use std::any::TypeId;
 
 use super::multicore;
+use ec_gpu::GpuName;
+use ec_gpu_gen::{
+    fft::FftKernel,
+    rust_gpu_tools::Device,
+    threadpool::Worker,
+};
 pub use ff::Field;
 use group::{
     ff::{BatchInvert, PrimeField},
     Group as _,
 };
+use tracing::info;
 
 pub use pasta_curves::arithmetic::*;
 
@@ -158,6 +166,40 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
     }
 }
 
+fn fft_gpu<F: PrimeField + GpuName>(a: &mut [F], omega: F, log_n: u32)
+{
+   let devices = Device::all();
+   let programs = devices
+       .iter()
+       .map(|device| ec_gpu_gen::program!(device))
+       .collect::<Result<_, _>>().unwrap();
+   let pool = Worker::new();
+   let mut kernel = FftKernel::create(programs).unwrap();
+
+   kernel.radix_fft_many(&mut [a][..], &[omega], &[log_n]).unwrap();
+}
+
+#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
+    best_fft_halo2(a, omega, log_n)
+}
+
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
+    // There is FFT for fields and for curve groups. Currently the GPU code in `ec-gpu` only
+    // supports FFT on field elements.
+    if TypeId::of::<G>() == TypeId::of::<G::Scalar>() {
+        println!("vmx: FFT: it's a field and *not* a curve group, use GPU.");
+        // We know that the `Group` is really a field, hence transmute it, to make it work with the
+        // GPU code.
+        let a = unsafe { &mut *(a as *mut [G] as *mut [G::Scalar]) };
+        fft_gpu(a, omega, log_n)
+
+    } else {
+        best_fft_halo2(a, omega, log_n)
+    }
+}
+
 /// Performs a radix-$2$ Fast-Fourier Transformation (FFT) on a vector of size
 /// $n = 2^k$, when provided `log_n` = $k$ and an element of multiplicative
 /// order $n$ called `omega` ($\omega$). The result is that the vector `a`, when
@@ -168,7 +210,7 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 /// by $n$.
 ///
 /// This will use multithreading if beneficial.
-pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
+pub fn best_fft_halo2<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
     fn bitreverse(mut n: usize, l: usize) -> usize {
         let mut r = 0;
         for _ in 0..l {

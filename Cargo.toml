@@ -4,3 +4,13 @@ members = [
     "halo2_gadgets",
     "halo2_proofs",
 ]
+
+[patch.crates-io]
+#blstrs = { path = "../../blstrs" }
+#ec-gpu-gen = { path = "../../ec-gpu/ec-gpu-gen" }
+#ff = { path = "../ff" }
+#pasta_curves = { path = "../pasta_curves" }
+blstrs = { git = "https://github.com/filecoin-project/blstrs", branch = "gpuname-fp6-fp12" }
+ec-gpu-gen = { git = "https://github.com/filecoin-project/ec-gpu", branch = "program-macro" }
+ff = { git = "https://github.com/filecoin-project/ff", branch = "add-gpu-feature"}
+pasta_curves = { git = "https://github.com/filecoin-project/pasta_curves", branch = "ff-field-trait" }
