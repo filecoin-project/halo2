@@ -127,12 +127,54 @@ pub fn small_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::C
     acc
 }
 
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
+    coeffs: &[G::Scalar],
+    bases: &[G],
+) -> G::Curve {
+    println!("vmx: Multiexp: use GPU.");
+    use ec_gpu_gen::{multiexp::MultiexpKernel, rust_gpu_tools::Device, threadpool::Worker};
+    use std::sync::Arc;
+
+    let devices = Device::all();
+    let programs = devices
+        .iter()
+        .map(|device| ec_gpu_gen::program!(device))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut kernel = MultiexpKernel::create(programs, &devices).unwrap();
+    let pool = Worker::new();
+
+    // NOTE vmx 2022-08-17: Let's hope that `PrimeCurveAffine::Scalar` and `PrimeField::Repr` is
+    // the same.
+    let coeffs =
+        unsafe { &*(coeffs as *const [G::Scalar] as *const [<G::Scalar as PrimeField>::Repr]) };
+    kernel
+        .multiexp(
+            &pool,
+            Arc::new(bases.to_vec()),
+            Arc::new(coeffs.to_vec()),
+            0,
+        )
+        .unwrap()
+}
+
+#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    best_multiexp_halo2(coeffs, bases)
+}
+
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    multiexp_gpu(coeffs, bases)
+}
+
 /// Performs a multi-exponentiation operation.
 ///
 /// This function will panic if coeffs and bases have a different length.
 ///
 /// This will use multithreading if beneficial.
-pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+pub fn best_multiexp_halo2<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     assert_eq!(coeffs.len(), bases.len());
 
     let num_threads = multicore::current_num_threads();
