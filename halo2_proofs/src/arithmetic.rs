@@ -4,11 +4,6 @@ use std::any::TypeId;
 
 use super::multicore;
 use ec_gpu::GpuName;
-use ec_gpu_gen::{
-    fft::FftKernel,
-    rust_gpu_tools::Device,
-    threadpool::Worker,
-};
 pub use ff::Field;
 use group::{
     ff::{BatchInvert, PrimeField},
@@ -166,17 +161,21 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
     }
 }
 
-fn fft_gpu<F: PrimeField + GpuName>(a: &mut [F], omega: F, log_n: u32)
-{
-   let devices = Device::all();
-   let programs = devices
-       .iter()
-       .map(|device| ec_gpu_gen::program!(device))
-       .collect::<Result<_, _>>().unwrap();
-   let pool = Worker::new();
-   let mut kernel = FftKernel::create(programs).unwrap();
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+fn fft_gpu<F: PrimeField>(a: &mut [F], omega: F, log_n: u32) {
+    use ec_gpu_gen::{
+        fft::FftKernel,
+        rust_gpu_tools::Device,
+    };
 
-   kernel.radix_fft_many(&mut [a][..], &[omega], &[log_n]).unwrap();
+    let devices = Device::all();
+    let programs = devices
+        .iter()
+        .map(|device| ec_gpu_gen::program!(device))
+        .collect::<Result<_, _>>().unwrap();
+    let mut kernel = FftKernel::create(programs).unwrap();
+
+    kernel.radix_fft_many(&mut [a][..], &[omega], &[log_n]).unwrap();
 }
 
 #[cfg(not(any(feature = "cuda", feature = "opencl")))]
