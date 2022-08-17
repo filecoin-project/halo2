@@ -52,6 +52,8 @@ pasta_curves = "0.4"
 rand_core = { version = "0.6", default-features = false }
 tracing = "0.1"
 blake2b_simd = "1"
+ec-gpu = { version = "0.2.0", optional = true }
+ec-gpu-gen = { version = "0.5.0", optional = true }
 
 # Developer tooling dependencies
 plotters = { version = "0.3.0", default-features = false, optional = true }
@@ -64,6 +66,10 @@ gumdrop = "0.8"
 proptest = "1"
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
 
+[build-dependencies]
+ec-gpu-gen = "0.5.0"
+pasta_curves = "0.4"
+
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 
@@ -73,6 +79,8 @@ dev-graph = ["plotters", "tabbycat"]
 gadget-traces = ["backtrace"]
 sanity-checks = []
 batch = ["rand_core/getrandom"]
+cuda = ["ec-gpu", "ec-gpu-gen/cuda", "pasta_curves/gpu"]
+opencl = ["ec-gpu", "ec-gpu-gen/opencl", "pasta_curves/gpu"]
 
 [lib]
 bench = false

@@ -4,3 +4,6 @@ members = [
     "halo2_gadgets",
     "halo2_proofs",
 ]
+
+[patch.crates-io]
+pasta_curves = { git = "https://github.com/filecoin-project/pasta_curves", branch = "gpu" }

@@ -124,12 +124,45 @@ pub fn small_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::C
     acc
 }
 
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
+    coeffs: &[G::Scalar],
+    bases: &[G],
+) -> G::Curve {
+    use ec_gpu_gen::{multiexp::MultiexpKernel, rust_gpu_tools::Device, threadpool::Worker};
+    use std::sync::Arc;
+
+    let devices = Device::all();
+    let programs = devices
+        .iter()
+        .map(|device| ec_gpu_gen::program!(device))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut kernel = MultiexpKernel::create(programs, &devices).unwrap();
+    let pool = Worker::new();
+
+    let coeffs = coeffs.into_iter().map(|fr| fr.to_repr()).collect();
+    kernel
+        .multiexp(&pool, Arc::new(bases.to_vec()), Arc::new(coeffs), 0)
+        .unwrap()
+}
+
+#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    best_multiexp_halo2(coeffs, bases)
+}
+
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    multiexp_gpu(coeffs, bases)
+}
+
 /// Performs a multi-exponentiation operation.
 ///
 /// This function will panic if coeffs and bases have a different length.
 ///
 /// This will use multithreading if beneficial.
-pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+pub fn best_multiexp_halo2<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     assert_eq!(coeffs.len(), bases.len());
 
     let num_threads = multicore::current_num_threads();
@@ -158,6 +191,43 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+fn fft_gpu<F: PrimeField + ec_gpu::GpuName>(a: &mut [F], omega: F, log_n: u32) {
+    use ec_gpu_gen::{fft::FftKernel, rust_gpu_tools::Device};
+
+    let devices = Device::all();
+    let programs = devices
+        .iter()
+        .map(|device| ec_gpu_gen::program!(device))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut kernel = FftKernel::create(programs).unwrap();
+
+    kernel
+        .radix_fft_many(&mut [a][..], &[omega], &[log_n])
+        .unwrap();
+}
+
+#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
+    best_fft_halo2(a, omega, log_n)
+}
+
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
+    // There is FFT for fields and for curve groups. Currently the GPU code in `ec-gpu` only
+    // supports FFT on field elements.
+    if std::any::TypeId::of::<G>() == std::any::TypeId::of::<G::Scalar>() {
+        //println!("vmx: FFT: it's a field and *not* a curve group, use GPU.");
+        // We know that the `Group` is really a field, hence transmute it, to make it work with the
+        // GPU code.
+        let a = unsafe { &mut *(a as *mut [G] as *mut [G::Scalar]) };
+        fft_gpu(a, omega, log_n)
+    } else {
+        best_fft_halo2(a, omega, log_n)
+    }
+}
+
 /// Performs a radix-$2$ Fast-Fourier Transformation (FFT) on a vector of size
 /// $n = 2^k$, when provided `log_n` = $k$ and an element of multiplicative
 /// order $n$ called `omega` ($\omega$). The result is that the vector `a`, when
@@ -168,7 +238,7 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 /// by $n$.
 ///
 /// This will use multithreading if beneficial.
-pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
+pub fn best_fft_halo2<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
     fn bitreverse(mut n: usize, l: usize) -> usize {
         let mut r = 0;
         for _ in 0..l {
