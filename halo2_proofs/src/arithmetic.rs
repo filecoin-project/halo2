@@ -145,17 +145,9 @@ fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
     let mut kernel = MultiexpKernel::create(programs, &devices).unwrap();
     let pool = Worker::new();
 
-    // NOTE vmx 2022-08-17: Let's hope that `PrimeCurveAffine::Scalar` and `PrimeField::Repr` is
-    // the same.
-    let coeffs =
-        unsafe { &*(coeffs as *const [G::Scalar] as *const [<G::Scalar as PrimeField>::Repr]) };
+    let coeffs = coeffs.into_iter().map(|fr| fr.to_repr()).collect();
     kernel
-        .multiexp(
-            &pool,
-            Arc::new(bases.to_vec()),
-            Arc::new(coeffs.to_vec()),
-            0,
-        )
+        .multiexp(&pool, Arc::new(bases.to_vec()), Arc::new(coeffs), 0)
         .unwrap()
 }
 
