@@ -300,11 +300,10 @@ fn test_commit_lagrange_eqaffine() {
 
 #[test]
 fn test_opening_proof() {
-    const K: u32 = 2;
+    const K: u32 = 6;
 
     use ff::Field;
-    use rand::rngs::StdRng;
-    use rand_core::{OsRng, SeedableRng};
+    use rand_core::OsRng;
 
     use super::{
         commitment::{Blind, Params},
@@ -316,8 +315,7 @@ fn test_opening_proof() {
         Blake2bRead, Blake2bWrite, Challenge255, Transcript, TranscriptRead, TranscriptWrite,
     };
 
-    //let rng = OsRng;
-    let rng = StdRng::seed_from_u64(123);
+    let rng = OsRng;
 
     let params = Params::<EpAffine>::new(K);
     let mut params_buffer = vec![];
@@ -332,7 +330,7 @@ fn test_opening_proof() {
         *a = Fq::from(i as u64);
     }
 
-    let blind = Blind(Fq::random(rng.clone()));
+    let blind = Blind(Fq::random(rng));
 
     let p = params.commit(&px, blind).to_affine();
 
@@ -368,7 +366,6 @@ fn test_opening_proof() {
     {
         // Test use_challenges()
         let msm_challenges = guard.clone().use_challenges();
-        println!("vmx: msm challenges: {:?}", msm_challenges);
         assert!(msm_challenges.eval());
 
         // Test use_g()
