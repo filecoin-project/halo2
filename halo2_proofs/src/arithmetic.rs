@@ -132,7 +132,7 @@ fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
     coeffs: &[G::Scalar],
     bases: &[G],
 ) -> G::Curve {
-    println!("vmx: Multiexp: use GPU.");
+    //println!("vmx: Multiexp: use GPU.");
     use ec_gpu_gen::{multiexp::MultiexpKernel, rust_gpu_tools::Device, threadpool::Worker};
     use std::sync::Arc;
 
@@ -222,7 +222,7 @@ pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
     // There is FFT for fields and for curve groups. Currently the GPU code in `ec-gpu` only
     // supports FFT on field elements.
     if TypeId::of::<G>() == TypeId::of::<G::Scalar>() {
-        println!("vmx: FFT: it's a field and *not* a curve group, use GPU.");
+        //println!("vmx: FFT: it's a field and *not* a curve group, use GPU.");
         // We know that the `Group` is really a field, hence transmute it, to make it work with the
         // GPU code.
         let a = unsafe { &mut *(a as *mut [G] as *mut [G::Scalar]) };
