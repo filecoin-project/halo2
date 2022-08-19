@@ -11,6 +11,7 @@ members = [
 #ff = { path = "../ff" }
 #pasta_curves = { path = "../pasta_curves" }
 #blstrs = { git = "https://github.com/filecoin-project/blstrs", branch = "gpuname-fp6-fp12" }
-#ec-gpu-gen = { git = "https://github.com/filecoin-project/ec-gpu", branch = "program-macro" }
+ec-gpu-gen = { git = "https://github.com/filecoin-project/ec-gpu", branch = "program-macro" }
 ff = { git = "https://github.com/filecoin-project/ff", branch = "add-gpu-feature"}
-#pasta_curves = { git = "https://github.com/filecoin-project/pasta_curves", branch = "ff-field-trait" }
+pasta_curves = { git = "https://github.com/filecoin-project/pasta_curves", branch = "ff-field-trait" }
+#pasta_curves = { git = "https://github.com/filecoin-project/pasta_curves", branch = "ec-gpu-020" }
