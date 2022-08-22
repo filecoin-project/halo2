@@ -9,7 +9,7 @@ use group::{
     ff::{BatchInvert, PrimeField},
     Group as _,
 };
-use tracing::info;
+use log::{debug, info};
 
 pub use pasta_curves::arithmetic::*;
 
@@ -132,7 +132,7 @@ fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
     coeffs: &[G::Scalar],
     bases: &[G],
 ) -> G::Curve {
-    //println!("vmx: Multiexp: use GPU.");
+    debug!("vmx: halo2: multiexp_gpu: num bases: {}", bases.len());
     use ec_gpu_gen::{multiexp::MultiexpKernel, rust_gpu_tools::Device, threadpool::Worker};
     use std::sync::Arc;
 
@@ -145,7 +145,9 @@ fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
     let mut kernel = MultiexpKernel::create(programs, &devices).unwrap();
     let pool = Worker::new();
 
+    debug!("vmx: halo2: multiexp_gpu: convert coeffs start");
     let coeffs = coeffs.into_iter().map(|fr| fr.to_repr()).collect();
+    debug!("vmx: halo2: multiexp_gpu: convert coeffs stop");
     kernel
         .multiexp(&pool, Arc::new(bases.to_vec()), Arc::new(coeffs), 0)
         .unwrap()
@@ -197,6 +199,7 @@ pub fn best_multiexp_halo2<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) ->
 
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 fn fft_gpu<F: PrimeField>(a: &mut [F], omega: F, log_n: u32) {
+    debug!("vmx: halo2: fft_gpu: num a: {}", a.len());
     use ec_gpu_gen::{fft::FftKernel, rust_gpu_tools::Device};
 
     let devices = Device::all();
