@@ -1,5 +1,6 @@
 use ff::Field;
 use group::Curve;
+use log::debug;
 use rand_core::RngCore;
 use std::iter;
 use std::ops::RangeTo;
@@ -86,6 +87,7 @@ pub fn create_proof<
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            debug!("vmx: halo2: plonk: prover: num instance values: {}", instance_values.len());
             let instance_commitments_projective: Vec<_> = instance_values
                 .iter()
                 .map(|poly| params.commit_lagrange(poly, Blind::default()))
@@ -298,6 +300,7 @@ pub fn create_proof<
                 .iter()
                 .map(|_| Blind(C::Scalar::random(&mut rng)))
                 .collect();
+            debug!("vmx: halo2: plonk: prover: num advices1: {}", advice.len());
             let advice_commitments_projective: Vec<_> = advice
                 .iter()
                 .zip(advice_blinds.iter())
@@ -312,12 +315,14 @@ pub fn create_proof<
                 transcript.write_point(*commitment)?;
             }
 
+            debug!("vmx: halo2: plonk: prover: num advices2: {}", advice.len());
             let advice_polys: Vec<_> = advice
                 .clone()
                 .into_iter()
                 .map(|poly| domain.lagrange_to_coeff(poly))
                 .collect();
 
+            debug!("vmx: halo2: plonk: prover: num advices polys: {}", advice_polys.len());
             let advice_cosets: Vec<_> = advice_polys
                 .iter()
                 .map(|poly| domain.coeff_to_extended(poly.clone()))

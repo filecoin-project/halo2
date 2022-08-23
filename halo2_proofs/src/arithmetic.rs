@@ -169,6 +169,7 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 ///
 /// This will use multithreading if beneficial.
 pub fn best_multiexp_halo2<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    debug!("vmx: halo2: multiexp_cpu: num bases: {}", bases.len());
     assert_eq!(coeffs.len(), bases.len());
 
     let num_threads = multicore::current_num_threads();
