@@ -4,6 +4,7 @@ use log::debug;
 use rand_core::RngCore;
 use std::iter;
 use std::ops::RangeTo;
+use rayon::iter::{ParallelIterator, IntoParallelRefIterator, IntoParallelIterator};
 
 use super::{
     circuit::{
@@ -89,7 +90,7 @@ pub fn create_proof<
                 .collect::<Result<Vec<_>, _>>()?;
             debug!("vmx: halo2: plonk: prover: num instance values: {}", instance_values.len());
             let instance_commitments_projective: Vec<_> = instance_values
-                .iter()
+                .par_iter()
                 .map(|poly| params.commit_lagrange(poly, Blind::default()))
                 .collect();
             let mut instance_commitments =
@@ -103,7 +104,7 @@ pub fn create_proof<
             }
 
             let instance_polys: Vec<_> = instance_values
-                .iter()
+                .par_iter()
                 .map(|poly| {
                     let lagrange_vec = domain.lagrange_from_vec(poly.to_vec());
                     domain.lagrange_to_coeff(lagrange_vec)
@@ -111,7 +112,7 @@ pub fn create_proof<
                 .collect();
 
             let instance_cosets: Vec<_> = instance_polys
-                .iter()
+                .par_iter()
                 .map(|poly| domain.coeff_to_extended(poly.clone()))
                 .collect();
 
@@ -318,13 +319,13 @@ pub fn create_proof<
             debug!("vmx: halo2: plonk: prover: num advices2: {}", advice.len());
             let advice_polys: Vec<_> = advice
                 .clone()
-                .into_iter()
+                .into_par_iter()
                 .map(|poly| domain.lagrange_to_coeff(poly))
                 .collect();
 
             debug!("vmx: halo2: plonk: prover: num advices polys: {}", advice_polys.len());
             let advice_cosets: Vec<_> = advice_polys
-                .iter()
+                .par_iter()
                 .map(|poly| domain.coeff_to_extended(poly.clone()))
                 .collect();
 
@@ -605,7 +606,7 @@ pub fn create_proof<
         // Evaluate polynomials at omega^i x
         let instance_evals: Vec<_> = meta
             .instance_queries
-            .iter()
+            .par_iter()
             .map(|&(column, at)| {
                 eval_polynomial(
                     &instance.instance_polys[column.index()],
@@ -625,7 +626,7 @@ pub fn create_proof<
         // Evaluate polynomials at omega^i x
         let advice_evals: Vec<_> = meta
             .advice_queries
-            .iter()
+            .par_iter()
             .map(|&(column, at)| {
                 eval_polynomial(
                     &advice.advice_polys[column.index()],
@@ -643,7 +644,7 @@ pub fn create_proof<
     // Compute and hash fixed evals (shared across all circuit instances)
     let fixed_evals: Vec<_> = meta
         .fixed_queries
-        .iter()
+        .par_iter()
         .map(|&(column, at)| {
             eval_polynomial(&pk.fixed_polys[column.index()], domain.rotate_omega(*x, at))
         })
