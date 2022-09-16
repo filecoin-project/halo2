@@ -2,20 +2,22 @@
 //! domain that is of a suitable size for the application.
 
 use crate::{
-    arithmetic::{best_fft, parallelize, FieldExt, Group},
-    plonk::Assigned,
+    arithmetic::{best_fft, parallelize, CurveAffine, FieldExt, Group},
+    plonk::{Assigned, ConstraintSystem, FIELD_SIZE},
+    poly::commitment::Params,
 };
 
 use super::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation};
 
 use group::ff::{BatchInvert, Field, PrimeField};
 
+use std::io;
 use std::marker::PhantomData;
 
 /// This structure contains precomputed constants and other details needed for
 /// performing operations on an evaluation domain of size $2^k$ and an extended
 /// domain of size $2^{k} * j$ with $j \neq 0$.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EvaluationDomain<G: Group> {
     n: u64,
     k: u32,
@@ -484,6 +486,185 @@ impl<G: Group> EvaluationDomain<G> {
             extended_k: &self.extended_k,
             omega: &self.omega,
         }
+    }
+
+    /// Writes evaluation domain to a buffer.
+    #[allow(unsafe_code)]
+    pub fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        assert_eq!(std::mem::size_of::<G::Scalar>(), FIELD_SIZE);
+
+        writer.write_all(&self.n.to_le_bytes())?;
+        writer.write_all(&self.k.to_le_bytes())?;
+        writer.write_all(&self.extended_k.to_le_bytes())?;
+        {
+            let bytes_ptr = (&self.omega as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let bytes_ptr = (&self.omega_inv as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let bytes_ptr = (&self.extended_omega as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let bytes_ptr =
+                (&self.extended_omega_inv as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let bytes_ptr = (&self.g_coset as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let bytes_ptr = (&self.g_coset_inv as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        writer.write_all(&self.quotient_poly_degree.to_le_bytes())?;
+        {
+            let bytes_ptr = (&self.ifft_divisor as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let bytes_ptr =
+                (&self.extended_ifft_divisor as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+        {
+            let byte_len = self.t_evaluations.len() * FIELD_SIZE;
+            let bytes_ptr = self.t_evaluations.as_ptr() as *const u8;
+            let bytes = unsafe { std::slice::from_raw_parts(bytes_ptr, byte_len) };
+            writer.write_all(&bytes)?;
+        }
+        {
+            let bytes_ptr =
+                (&self.barycentric_weight as *const G::Scalar) as *const [u8; FIELD_SIZE];
+            unsafe { writer.write_all(&*bytes_ptr)? };
+        }
+
+        Ok(())
+    }
+
+    /// Reads evaluation domain from a buffer.
+    #[allow(unsafe_code)]
+    pub fn read<R: io::Read, C: CurveAffine>(
+        reader: &mut R,
+        params: &Params<C>,
+        cs: &ConstraintSystem<G::Scalar>,
+    ) -> io::Result<Self> {
+        assert_eq!(std::mem::size_of::<G::Scalar>(), FIELD_SIZE);
+
+        let n = {
+            let mut buf = [0u8; 8];
+            reader.read_exact(&mut buf)?;
+            u64::from_le_bytes(buf)
+        };
+        assert_eq!(n, params.n);
+
+        let k = {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            u32::from_le_bytes(buf)
+        };
+        assert_eq!(k, params.k);
+
+        let extended_k = {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            u32::from_le_bytes(buf)
+        };
+        assert!(extended_k >= k);
+
+        let omega = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+        let omega_inv = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+        assert_eq!(omega * &omega_inv, G::Scalar::one());
+
+        let extended_omega = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+        let extended_omega_inv = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+        assert_eq!(extended_omega * &extended_omega_inv, G::Scalar::one());
+
+        let g_coset = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+        let g_coset_inv = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+        assert_eq!(g_coset * &g_coset_inv, G::Scalar::one());
+
+        let quotient_poly_degree = {
+            let mut buf = [0u8; 8];
+            reader.read_exact(&mut buf)?;
+            u64::from_le_bytes(buf)
+        };
+        assert_eq!(quotient_poly_degree, cs.degree() as u64 - 1);
+        let n_quotient_deg = n * quotient_poly_degree;
+        assert!(1 << extended_k >= n_quotient_deg);
+        assert!(1 << (extended_k - 1) < n_quotient_deg);
+
+        let ifft_divisor = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+
+        let extended_ifft_divisor = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+
+        let t_evaluations = {
+            let len = 1 << (extended_k - k);
+            let byte_len = len * FIELD_SIZE;
+            let mut buf = vec![0u8; byte_len];
+            reader.read_exact(&mut buf)?;
+            let mut buf_no_drop = std::mem::ManuallyDrop::new(buf);
+            unsafe { Vec::from_raw_parts(buf_no_drop.as_mut_ptr() as *mut G::Scalar, len, len) }
+        };
+
+        let barycentric_weight = {
+            let mut buf = [0u8; FIELD_SIZE];
+            reader.read_exact(&mut buf)?;
+            unsafe { *(buf.as_ptr() as *const G::Scalar) }
+        };
+
+        Ok(EvaluationDomain {
+            n,
+            k,
+            extended_k,
+            omega,
+            omega_inv,
+            extended_omega,
+            extended_omega_inv,
+            g_coset,
+            g_coset_inv,
+            quotient_poly_degree,
+            ifft_divisor,
+            extended_ifft_divisor,
+            t_evaluations,
+            barycentric_weight,
+        })
     }
 }
 

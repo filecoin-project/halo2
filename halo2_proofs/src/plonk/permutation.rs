@@ -1,4 +1,7 @@
-use super::circuit::{Any, Column};
+use super::{
+    circuit::{Any, Column},
+    AFFINE_SIZE,
+};
 use crate::{
     arithmetic::CurveAffine,
     poly::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial},
@@ -8,8 +11,10 @@ pub(crate) mod keygen;
 pub(crate) mod prover;
 pub(crate) mod verifier;
 
+use std::io;
+
 /// A permutation argument.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Argument {
     /// A sequence of columns involved in the argument.
     columns: Vec<Column<Any>>,
@@ -67,18 +72,98 @@ impl Argument {
     pub(crate) fn get_columns(&self) -> Vec<Column<Any>> {
         self.columns.clone()
     }
+
+    /// Returns the number of columns.
+    pub(crate) fn len(&self) -> usize {
+        self.columns.len()
+    }
 }
 
 /// The verifying key for a single permutation argument.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct VerifyingKey<C: CurveAffine> {
     commitments: Vec<C>,
 }
 
+impl<C: CurveAffine> VerifyingKey<C> {
+    /// Writes verifying key to a buffer.
+    #[allow(unsafe_code)]
+    pub fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        let byte_len = self.commitments.len() * AFFINE_SIZE;
+        let bytes_ptr = self.commitments.as_ptr() as *const u8;
+        let bytes = unsafe { std::slice::from_raw_parts(bytes_ptr, byte_len) };
+        writer.write_all(&bytes)?;
+
+        Ok(())
+    }
+
+    /// Reads verifying key from a buffer.
+    #[allow(unsafe_code)]
+    pub fn read<R: io::Read>(reader: &mut R, commitments_len: usize) -> io::Result<Self> {
+        let byte_len = commitments_len * AFFINE_SIZE;
+        let mut buf = vec![0u8; byte_len];
+        reader.read_exact(&mut buf)?;
+        let mut buf_no_drop = std::mem::ManuallyDrop::new(buf);
+        let commitments = unsafe {
+            Vec::from_raw_parts(
+                buf_no_drop.as_mut_ptr() as *mut C,
+                commitments_len,
+                commitments_len,
+            )
+        };
+
+        Ok(VerifyingKey { commitments })
+    }
+}
+
 /// The proving key for a single permutation argument.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ProvingKey<C: CurveAffine> {
     permutations: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
     polys: Vec<Polynomial<C::Scalar, Coeff>>,
     pub(super) cosets: Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>>,
+}
+
+impl<C: CurveAffine> ProvingKey<C> {
+    /// Writes proving key to a buffer.
+    pub fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        let n = u8::try_from(self.permutations.len())
+            .expect("Number of permutations must be less than 256");
+        writer.write_all(&n.to_le_bytes())?;
+
+        for permutation in &self.permutations {
+            permutation.write(writer)?;
+        }
+        for poly in &self.polys {
+            poly.write(writer)?;
+        }
+        for coset in &self.cosets {
+            coset.write(writer)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reads proving key from a buffer.
+    pub fn read<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        let mut buffer = [0u8; 1];
+        reader.read_exact(&mut buffer[..])?;
+        let n = u8::from_le_bytes(buffer);
+
+        let permutations: Vec<_> = (0..n)
+            .map(|_| Polynomial::read(reader))
+            .collect::<Result<_, _>>()?;
+        let polys: Vec<_> = (0..n)
+            .map(|_| Polynomial::read(reader))
+            .collect::<Result<_, _>>()?;
+        let cosets: Vec<_> = (0..n)
+            .map(|_| Polynomial::read(reader))
+            .collect::<Result<_, _>>()?;
+
+        Ok(ProvingKey {
+            permutations,
+            polys,
+            cosets,
+        })
+    }
 }

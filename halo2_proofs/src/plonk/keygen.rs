@@ -45,14 +45,31 @@ where
 
 /// Assembly to be used in circuit synthesis.
 #[derive(Debug)]
-struct Assembly<F: Field> {
+pub(crate) struct Assembly<F: Field> {
     k: u32,
     fixed: Vec<Polynomial<Assigned<F>, LagrangeCoeff>>,
     permutation: permutation::keygen::Assembly,
-    selectors: Vec<Vec<bool>>,
+    pub(crate) selectors: Vec<Vec<bool>>,
     // A range of available rows for assignment and copies.
     usable_rows: Range<usize>,
     _marker: std::marker::PhantomData<F>,
+}
+
+impl<F: Field> Assembly<F> {
+    pub fn new<C: CurveAffine>(
+        params: &Params<C>,
+        cs: &ConstraintSystem<F>,
+        empty_lagrange: Polynomial<Assigned<F>, LagrangeCoeff>,
+    ) -> Self {
+        Assembly {
+            k: params.k,
+            fixed: vec![empty_lagrange; cs.num_fixed_columns],
+            permutation: permutation::keygen::Assembly::new(params.n as usize, &cs.permutation),
+            selectors: vec![vec![false; params.n as usize]; cs.num_selectors],
+            usable_rows: 0..params.n as usize - (cs.blinding_factors() + 1),
+            _marker: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<F: Field> Assignment<F> for Assembly<F> {
@@ -200,14 +217,7 @@ where
         return Err(Error::not_enough_rows_available(params.k));
     }
 
-    let mut assembly: Assembly<C::Scalar> = Assembly {
-        k: params.k,
-        fixed: vec![domain.empty_lagrange_assigned(); cs.num_fixed_columns],
-        permutation: permutation::keygen::Assembly::new(params.n as usize, &cs.permutation),
-        selectors: vec![vec![false; params.n as usize]; cs.num_selectors],
-        usable_rows: 0..params.n as usize - (cs.blinding_factors() + 1),
-        _marker: std::marker::PhantomData,
-    };
+    let mut assembly = Assembly::new(params, &cs, domain.empty_lagrange_assigned());
 
     // Synthesize the circuit to obtain URS
     ConcreteCircuit::FloorPlanner::synthesize(
@@ -261,14 +271,7 @@ where
         return Err(Error::not_enough_rows_available(params.k));
     }
 
-    let mut assembly: Assembly<C::Scalar> = Assembly {
-        k: params.k,
-        fixed: vec![vk.domain.empty_lagrange_assigned(); cs.num_fixed_columns],
-        permutation: permutation::keygen::Assembly::new(params.n as usize, &cs.permutation),
-        selectors: vec![vec![false; params.n as usize]; cs.num_selectors],
-        usable_rows: 0..params.n as usize - (cs.blinding_factors() + 1),
-        _marker: std::marker::PhantomData,
-    };
+    let mut assembly = Assembly::new(params, &cs, vk.domain.empty_lagrange_assigned());
 
     // Synthesize the circuit to obtain URS
     ConcreteCircuit::FloorPlanner::synthesize(

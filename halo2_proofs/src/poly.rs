@@ -2,14 +2,17 @@
 //! various forms, including computing commitments to them and provably opening
 //! the committed polynomials at arbitrary points.
 
-use crate::arithmetic::parallelize;
+use crate::arithmetic::{parallelize, Group};
 use crate::plonk::Assigned;
 
 use group::ff::{BatchInvert, Field};
 use pasta_curves::arithmetic::FieldExt;
 use std::fmt::Debug;
+use std::io;
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, RangeFrom, RangeFull};
+use std::slice;
 
 pub mod commitment;
 mod domain;
@@ -33,24 +36,24 @@ pub enum Error {
 pub trait Basis: Copy + Debug + Send + Sync {}
 
 /// The polynomial is defined as coefficients
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Coeff;
 impl Basis for Coeff {}
 
 /// The polynomial is defined as coefficients of Lagrange basis polynomials
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LagrangeCoeff;
 impl Basis for LagrangeCoeff {}
 
 /// The polynomial is defined as coefficients of Lagrange basis polynomials in
 /// an extended size domain which supports multiplication
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExtendedLagrangeCoeff;
 impl Basis for ExtendedLagrangeCoeff {}
 
 /// Represents a univariate polynomial defined over a field and a particular
 /// basis.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Polynomial<F, B> {
     values: Vec<F>,
     _marker: PhantomData<B>,
@@ -130,6 +133,45 @@ impl<F, B> Polynomial<F, B> {
     pub fn num_coeffs(&self) -> usize {
         self.values.len()
     }
+
+    /// Writes polynomial to a buffer.
+    #[allow(unsafe_code)]
+    pub fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        let len =
+            u32::try_from(self.values.len()).expect("Polynomials have less then 2^32 elements");
+        writer.write_all(&len.to_le_bytes())?;
+
+        let bytes_len = self.values.len() * mem::size_of::<F>();
+        let bytes = unsafe { slice::from_raw_parts(self.values.as_ptr() as *const u8, bytes_len) };
+        writer.write_all(&bytes)?;
+
+        Ok(())
+    }
+
+    /// Reads polynomoal from a buffer.
+    ///
+    /// `len` is the number of elements.
+    #[allow(unsafe_code)]
+    pub fn read<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        let mut buffer = [0u8; 4];
+        reader.read_exact(&mut buffer[..])?;
+        let len = usize::try_from(u32::from_le_bytes(buffer)).expect("Platform is at least 32-bit");
+
+        // Create a bytes buffer the fulll polynomial is read in, which is the transmuted to the
+        // final output value.
+        let mut buffer = vec![0; len * mem::size_of::<F>()];
+        reader.read_exact(&mut buffer[..])?;
+
+        // Make sure the memory is not freed.
+        let mut buffer_no_drop = mem::ManuallyDrop::new(buffer);
+        let values =
+            unsafe { Vec::from_raw_parts(buffer_no_drop.as_mut_ptr() as *mut F, len, len) };
+
+        Ok(Polynomial {
+            values,
+            _marker: PhantomData,
+        })
+    }
 }
 
 pub(crate) fn batch_invert_assigned<F: FieldExt>(
@@ -164,6 +206,17 @@ pub(crate) fn batch_invert_assigned<F: FieldExt>(
 }
 
 impl<F: Field> Polynomial<Assigned<F>, LagrangeCoeff> {
+    /// Creates a new empty polynomial of the given size.
+    pub fn new(len: usize) -> Self
+    where
+        F: Clone + Group,
+    {
+        Self {
+            values: vec![F::group_zero().into(); len],
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     pub(crate) fn invert(
         &self,
         inv_denoms: impl Iterator<Item = F> + ExactSizeIterator,
@@ -304,7 +357,7 @@ impl<F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
 /// Describes the relative rotation of a vector. Negative numbers represent
 /// reverse (leftmost) rotations and positive numbers represent forward (rightmost)
 /// rotations. Zero represents no rotation.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Rotation(pub i32);
 
 impl Rotation {
