@@ -986,4 +986,23 @@ fn plonk_api() {
 }"#####
         );
     }
+
+    // Test verifying key serializtion.
+    use halo2_proofs::plonk::VerifyingKey;
+    let vk = keygen_vk(&params, &empty_circuit).expect("keygen_vk should not fail");
+    let mut vk_bytes = Vec::<u8>::new();
+    vk.write(&mut vk_bytes).unwrap();
+    let mut vk_reader = std::io::Cursor::new(vk_bytes);
+    let vk2 = VerifyingKey::<EqAffine>::read(&mut vk_reader, &params, &empty_circuit).unwrap();
+    assert_eq!(vk, vk2);
+
+    // Test proving key serialization.
+    use halo2_proofs::plonk::ProvingKey;
+    let pk = keygen_pk(&params, vk.clone(), &empty_circuit).expect("keygen_pk should not fail");
+    let mut pk_bytes = Vec::<u8>::new();
+    pk.write(&mut pk_bytes).unwrap();
+    println!("vmx: tests: plonk apu: pk: len: {:?}", pk_bytes.len());
+    let mut pk_reader = std::io::Cursor::new(pk_bytes);
+    let pk2 = ProvingKey::read(&mut pk_reader, vk).unwrap();
+    assert_eq!(pk, pk2);
 }
