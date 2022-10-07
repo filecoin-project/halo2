@@ -179,8 +179,24 @@ impl<C: CurveAffine> VerifyingKey<C> {
         };
         let vk = Self::from_parts(domain, fixed_commitments, permutation, cs);
 
-        assert_eq!(cs_degree, vk.cs_degree);
-        assert_eq!(transcript_repr, vk.transcript_repr);
+        if vk.cs_degree != cs_degree {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "unequal cs_degrees (circuit={}, read={})",
+                    cs_degree, vk.cs_degree
+                ),
+            ));
+        }
+        if vk.transcript_repr != transcript_repr {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "unequal transcript_reprs (circuit={:?}, read={:?})",
+                    transcript_repr, vk.transcript_repr,
+                ),
+            ));
+        }
         Ok(vk)
     }
 
