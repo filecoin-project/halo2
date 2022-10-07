@@ -183,6 +183,11 @@ impl<C: CurveAffine> VerifyingKey<C> {
         assert_eq!(transcript_repr, vk.transcript_repr);
         Ok(vk)
     }
+
+    #[allow(missing_docs)]
+    pub fn transcript_repr(&self) -> &C::Scalar {
+        &self.transcript_repr
+    }
 }
 
 /// Minimal representation of a verification key that can be used to identify
