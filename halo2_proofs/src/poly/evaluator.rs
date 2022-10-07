@@ -8,6 +8,7 @@ use std::{
 
 use group::ff::Field;
 use pasta_curves::arithmetic::FieldExt;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
     Basis, Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
@@ -35,10 +36,10 @@ fn get_chunk_params(poly_len: usize) -> (usize, usize) {
 }
 
 /// A reference to a polynomial registered with an [`Evaluator`].
-#[derive(Clone, Copy)]
-pub(crate) struct AstLeaf<E, B: Basis> {
-    index: usize,
-    rotation: Rotation,
+#[derive(Clone, Copy, Deserialize, Serialize)]
+pub struct AstLeaf<E, B: Basis> {
+    pub index: usize,
+    pub rotation: Rotation,
     _evaluator: PhantomData<(E, B)>,
 }
 
@@ -91,9 +92,9 @@ impl<E, B: Basis> AstLeaf<E, B> {
 /// - The references are then used to build up a [`Ast`] that represents the overall
 ///   operations to be applied to the polynomials.
 /// - Finally, we call [`Evaluator::evaluate`] passing in the [`Ast`].
-pub(crate) struct Evaluator<E, F: Field, B: Basis> {
-    polys: Vec<Polynomial<F, B>>,
-    _context: E,
+pub struct Evaluator<E, F: Field, B: Basis> {
+    pub polys: Vec<Polynomial<F, B>>,
+    pub _context: E,
 }
 
 /// Constructs a new `Evaluator`.
@@ -102,12 +103,71 @@ pub(crate) struct Evaluator<E, F: Field, B: Basis> {
 /// an evaluator will only be used to evaluate [`Ast`]s containing [`AstLeaf`]s obtained
 /// from itself. It should be set to the empty closure `|| {}`, because anonymous closures
 /// all have unique types.
-pub(crate) fn new_evaluator<E: Fn() + Clone, F: Field, B: Basis>(context: E) -> Evaluator<E, F, B> {
+pub fn new_evaluator<E: Fn() + Clone, F: Field, B: Basis>(context: E) -> Evaluator<E, F, B> {
     Evaluator {
         polys: vec![],
         _context: context,
     }
 }
+
+fn get_of_rotated_pos<F: Field, B: Basis>(
+    pos: usize,
+    rotation_is_negative: bool,
+    rotation_abs: usize,
+    poly: &Polynomial<F, B>,
+) -> usize {
+    //let rotation_abs = rotation.0.unsigned_abs() as usize;
+    //let rotation_abs= ((1 << (self.extended_k - self.k)) * rotation.0.abs()) as usize;
+
+    let (mid, k) = if rotation_is_negative {
+        (poly.len() - rotation_abs, rotation_abs)
+    } else {
+        (rotation_abs, poly.len() - rotation_abs)
+    };
+    //println!("vmx: get_of_rotated_helper:       mid, k, len, abs: {} {} {} {}", mid, k, poly.len(), rotation_abs);
+
+    if pos < k {
+        mid + pos
+    } else {
+        pos - k
+    }
+    //if pos + 1 < k {
+    //   mid + pos
+    //} else if pos >= k {
+    //   pos - k
+    //} else {
+    //   panic!("vmx: oups, i thought this case doesn't happen")
+    //}
+}
+//fn get_of_rotated<F: Field, B: Basis>(pos: usize, rotation_is_negative: bool, rotation_abs: usize, poly: &Polynomial<F, B>) -> F {
+//    //let rotation_abs = rotation.0.unsigned_abs() as usize;
+//    //let rotation_abs= ((1 << (self.extended_k - self.k)) * rotation.0.abs()) as usize;
+//
+//    let (mid, k) = if rotation_is_negative {
+//        (poly.len() - rotation_abs, rotation_abs)
+//    } else {
+//        (rotation_abs, poly.len() - rotation_abs)
+//    };
+//        println!("vmx: get_of_rotated_helper:       mid, k, len, abs: {} {} {} {}", mid, k, poly.len(), rotation_abs);
+//
+//    if pos + 1 < k {
+//       poly[mid + pos]
+//    } else if pos >= k {
+//       poly[pos - k]
+//    } else {
+//       panic!("vmx: oups, i thought this case doesn't happen")
+//    }
+////let chunk_start = pos;
+////let chunk_end = pos + 1;
+////
+////if pos + 1 < k {
+////  poly.values[mid + pos..mid + pos + 1].to_vec()
+////} else if pos >= k {
+////  poly.values[pos - k..pos + 1 - k].to_vec()
+////    } else {
+////       panic!("vmx: oups, i thought this case doesn't happen")
+////    }
+//}
 
 impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     /// Registers the given polynomial for use in this evaluation context.
@@ -126,19 +186,29 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     }
 
     /// Evaluates the given polynomial operation against this context.
-    pub(crate) fn evaluate(
-        &self,
-        ast: &Ast<E, F, B>,
-        domain: &EvaluationDomain<F>,
-    ) -> Polynomial<F, B>
+    pub fn evaluate(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
     where
         E: Copy + Send + Sync,
-        F: FieldExt,
-        B: BasisOps,
+        F: FieldExt + Serialize + DeserializeOwned,
+        B: BasisOps + Serialize + DeserializeOwned,
     {
+        log::debug!("vmx: halo2: poly: evalutator: evaluate: ast: {:?}", ast);
         // We're working in a single basis, so all polynomials are the same length.
         let poly_len = self.polys.first().unwrap().len();
         let (chunk_size, _num_chunks) = get_chunk_params(poly_len);
+        log::debug!(
+            "vmx: halo2: poly: evalutator: evaluate: poly_len, chunk size, num chunks: {} {} {}",
+            poly_len,
+            chunk_size,
+            _num_chunks
+        );
+        //// NOTE vmx 2022-10-12: Don't chunk it and see what happens.
+        //let chunk_size = poly_len;
+        //log::debug!(
+        //    "vmx: halo2: poly: evalutator: evaluate: num polys, poly_len: {} {}",
+        //    self.polys.len(),
+        //    poly_len
+        //);
 
         struct AstContext<'a, F: FieldExt, B: Basis> {
             domain: &'a EvaluationDomain<F>,
@@ -153,19 +223,35 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             ctx: &AstContext<'_, F, B>,
         ) -> Vec<F> {
             match ast {
-                Ast::Poly(leaf) => B::get_chunk_of_rotated(
-                    ctx.domain,
-                    ctx.chunk_size,
-                    ctx.chunk_index,
-                    &ctx.polys[leaf.index],
-                    leaf.rotation,
-                ),
+                Ast::Poly(leaf) => {
+                    let orig_result = B::get_chunk_of_rotated(
+                        ctx.domain,
+                        ctx.chunk_size,
+                        ctx.chunk_index,
+                        &ctx.polys[leaf.index],
+                        leaf.rotation,
+                    );
+                    //println!("vmx: poly: orig: {:?}", orig_result[0]);
+                    //let rotation_abs = ((1 << (ctx.domain.extended_k - ctx.domain.k)) * leaf.rotation.0.abs()) as usize;
+                    //println!("vmx: poly: mine: roation_abs: {:?}", rotation_abs);
+                    //let myrotatedpos = get_of_rotated_pos(1, leaf.rotation.0 < 0, rotation_abs, &ctx.polys[leaf.index]);
+                    //////println!("vmx: rotated, my, direct: {:?} {:?} {:?}", rotated, ctx.polys[leaf.index][myrotatedpos], ctx.polys[leaf.index][0]);
+                    //println!("vmx: poly: mine: pos: {}", myrotatedpos);
+                    //println!("vmx: poly: mine: {:?}", ctx.polys[leaf.index][myrotatedpos]);
+                    //////vec![ctx.polys[leaf.index][0]]
+                    ////let result = vec![ctx.polys[leaf.index][myrotatedpos]];
+                    ////println!("vmx: poly: {:?}", result);
+                    ////result
+                    orig_result
+                }
                 Ast::Add(a, b) => {
                     let mut lhs = recurse(a, ctx);
                     let rhs = recurse(b, ctx);
                     for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
                         *lhs += *rhs;
                     }
+                    //lhs[0] += rhs[0];
+                    //println!("vmx: add: {:?}", lhs[0]);
                     lhs
                 }
                 Ast::Mul(AstMul(a, b)) => {
@@ -174,6 +260,9 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
                         *lhs *= *rhs;
                     }
+                    //println!("vmx: about to multiply {:?} with: {:?}", lhs[0], rhs[0]);
+                    //lhs[0] *= rhs[0];
+                    //println!("vmx: mul: {:?}", lhs[0]);
                     lhs
                 }
                 Ast::Scale(a, scalar) => {
@@ -181,6 +270,8 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     for lhs in lhs.iter_mut() {
                         *lhs *= scalar;
                     }
+                    //lhs[0] *= scalar;
+                    //println!("vmx: scale: {:?}", lhs[0]);
                     lhs
                 }
                 Ast::DistributePowers(terms, base) => terms.iter().fold(
@@ -188,27 +279,86 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     |mut acc, term| {
                         let term = recurse(term, ctx);
                         for (acc, term) in acc.iter_mut().zip(term) {
+                            //println!("vmx: debugging: acc: {:?}", acc);
                             *acc *= base;
+                            //println!("vmx: debugging: acc: {:?}", acc);
                             *acc += term;
+                            //println!("vmx: debugging: acc: {:?}", acc);
                         }
                         acc
                     },
                 ),
-                Ast::LinearTerm(scalar) => B::linear_term(
-                    ctx.domain,
-                    ctx.poly_len,
-                    ctx.chunk_size,
-                    ctx.chunk_index,
-                    *scalar,
-                ),
+                Ast::LinearTerm(scalar) => {
+                    let term = B::linear_term(
+                        ctx.domain,
+                        ctx.poly_len,
+                        ctx.chunk_size,
+                        ctx.chunk_index,
+                        *scalar,
+                    );
+                    //let omega = ctx.domain.get_extended_omega();
+                    //let mut result = omega.pow_vartime(&[0 as u64]) * F::ZETA * scalar;
+                    ////result *= omega;
+                    ////let zeta_scalar_omega = F::ZETA * scalar * omega;
+                    ////
+                    ////source.push(format!("let omega{} = {};", ctx.counter, to_fp_from_raw(&omega)));
+                    ////source.push(format!("let mut elem{} = omega{}.pow_vartime(&[pos as u64]) * {};", ctx.counter, ctx.counter, to_fp_from_raw(&zeta_scalar_omega)));
+                    //         println!("vmx: linear: my result of first element: {:?}", result);
+
+                    //println!("vmx: linear: {:?}", term[0]);
+                    term
+                    //vec![*scalar]
+                }
                 Ast::ConstantTerm(scalar) => {
-                    B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, *scalar)
+                    let term =
+                        B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, *scalar);
+                    //println!("vmx: const: {:?}", term[0]);
+                    term
+                    //vec![*scalar]
                 }
             }
         }
 
+        // Dump the AST
+        if matches!(ast, Ast::DistributePowers(_, _)) {
+            use std::io::Write;
+            let k = domain.k;
+            let j = domain.get_quotient_poly_degree() + 1;
+            let field =
+                std::any::type_name::<F>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+            let basis =
+                std::any::type_name::<B>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+            let time = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+
+            let mut ast_file = std::fs::File::create(format!(
+                "/tmp/halo2-{}-{}-{}-{}_{}.ast",
+                j, k, field, basis, time
+            ))
+            .unwrap();
+            let ast_bytes = bincode::serialize(&ast).expect("AST cannot be serialized");
+            ast_file.write_all(&ast_bytes).expect("write failed");
+
+            let mut polys_file = std::fs::File::create(format!(
+                "/tmp/halo2-{}-{}-{}-{}_{}.polys",
+                j, k, field, basis, time
+            ))
+            .unwrap();
+            // Prefix the poly file with the number of polynomials and the number of elements of
+            // the polynomials (they all have the same length).
+            let num_polys =
+                u32::try_from(self.polys.len()).expect("There are less then 2^32 polynomials");
+            polys_file.write_all(&num_polys.to_le_bytes()).unwrap();
+            let poly_len = u32::try_from(self.polys[0].len())
+                .expect("There are less then 2^32 elements in a polynomial");
+            polys_file.write_all(&poly_len.to_le_bytes()).unwrap();
+            for poly in &self.polys {
+                polys_file.write_all(poly.as_bytes()).unwrap();
+            }
+        }
+
+        log::trace!("vmx: halo2: poly: evalutator: evaluate: apply ast: start");
         // Apply `ast` to each chunk in parallel, writing the result into an output
-        // polynomial.
+        // done.
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
             for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
@@ -224,6 +374,22 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                 });
             }
         });
+        ////let mut result = Polynomial {
+        ////    values: vec![F::group_zero(); 1],
+        ////    _marker: PhantomData,
+        ////};
+        //let ctx = AstContext {
+        //    domain,
+        //    //poly_len: 1
+        //    //chunk_size: 1,
+        //    //chunk_index: 0,
+        //    poly_len,
+        //    chunk_size: poly_len,
+        //    chunk_index: 0,
+        //    polys: &self.polys,
+        //};
+        //result.copy_from_slice(&recurse(ast, &ctx));
+        log::trace!("vmx: halo2: poly: evalutator: evaluate: apply ast: done");
         result
     }
 }
@@ -233,8 +399,12 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
 /// This struct exists to make the internals of this case private so that we don't
 /// accidentally construct this case directly, because it can only be implemented for the
 /// [`ExtendedLagrangeCoeff`] basis.
-#[derive(Clone)]
-pub(crate) struct AstMul<E, F: Field, B: Basis>(Arc<Ast<E, F, B>>, Arc<Ast<E, F, B>>);
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(bound(
+    deserialize = "F: Deserialize<'de>, B: Deserialize<'de>",
+    serialize = "F: Serialize, B: Serialize",
+))]
+pub struct AstMul<E, F: Field, B: Basis>(pub Arc<Ast<E, F, B>>, pub Arc<Ast<E, F, B>>);
 
 impl<E, F: Field, B: Basis> fmt::Debug for AstMul<E, F, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -246,8 +416,12 @@ impl<E, F: Field, B: Basis> fmt::Debug for AstMul<E, F, B> {
 }
 
 /// A polynomial operation backed by an [`Evaluator`].
-#[derive(Clone)]
-pub(crate) enum Ast<E, F: Field, B: Basis> {
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(bound(
+    deserialize = "F: Deserialize<'de>, B: Deserialize<'de>",
+    serialize = "F: Serialize, B: Serialize",
+))]
+pub enum Ast<E, F: Field, B: Basis> {
     Poly(AstLeaf<E, B>),
     Add(Arc<Ast<E, F, B>>, Arc<Ast<E, F, B>>),
     Mul(AstMul<E, F, B>),
@@ -267,9 +441,15 @@ pub(crate) enum Ast<E, F: Field, B: Basis> {
     ConstantTerm(F),
 }
 
-impl<E, F: Field, B: Basis> Ast<E, F, B> {
+impl<E, F: Field + Serialize, B: Basis + Serialize> Ast<E, F, B> {
     pub fn distribute_powers<I: IntoIterator<Item = Self>>(i: I, base: F) -> Self {
-        Ast::DistributePowers(Arc::new(i.into_iter().collect()), base)
+        //Ast::DistributePowers(Arc::new(i.into_iter().collect()), base)
+        let terms = i.into_iter().collect::<Vec<_>>();
+        log::debug!(
+            "vmx: halo2: poly: evalutator: distribute powers: num terms: {}",
+            terms.len()
+        );
+        Ast::DistributePowers(Arc::new(terms), base)
     }
 }
 
@@ -440,7 +620,7 @@ impl<E: Clone, F: Field> MulAssign for Ast<E, F, ExtendedLagrangeCoeff> {
 }
 
 /// Operations which can be performed over a given basis.
-pub(crate) trait BasisOps: Basis {
+pub trait BasisOps: Basis {
     fn empty_poly<F: FieldExt>(domain: &EvaluationDomain<F>) -> Polynomial<F, Self>;
     fn constant_term<F: FieldExt>(
         poly_len: usize,

@@ -20,8 +20,8 @@ use std::marker::PhantomData;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EvaluationDomain<G: Group> {
     n: u64,
-    k: u32,
-    extended_k: u32,
+    pub k: u32,
+    pub extended_k: u32,
     omega: G::Scalar,
     omega_inv: G::Scalar,
     extended_omega: G::Scalar,
@@ -331,8 +331,13 @@ impl<G: Group> EvaluationDomain<G> {
         &self,
         mut a: Polynomial<G, ExtendedLagrangeCoeff>,
     ) -> Polynomial<G, ExtendedLagrangeCoeff> {
+        log::debug!(
+            "vmx: halo2: poly: domain: divide by vanishing poly: a values len: {}",
+            a.values.len()
+        );
         assert_eq!(a.values.len(), self.extended_len());
 
+        dbg!();
         // Divide to obtain the quotient polynomial in the coset evaluation
         // domain.
         parallelize(&mut a.values, |h, mut index| {
@@ -342,6 +347,7 @@ impl<G: Group> EvaluationDomain<G> {
             }
         });
 
+        dbg!();
         Polynomial {
             values: a.values,
             _marker: PhantomData,

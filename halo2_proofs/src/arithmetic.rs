@@ -1,5 +1,6 @@
 //! This module provides common utilities, traits and structures for group,
 //! field and polynomial arithmetic.
+use std::any::TypeId;
 
 use super::multicore;
 pub use ff::Field;
@@ -7,6 +8,7 @@ use group::{
     ff::{BatchInvert, PrimeField},
     Group as _,
 };
+use log::{debug, trace};
 
 pub use pasta_curves::arithmetic::*;
 
@@ -147,7 +149,31 @@ fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
         .unwrap()
 }
 
-#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+#[cfg(feature = "sppark")]
+fn multiexp_sppark_pallas<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    debug!(
+        "vmx: halo2: multiexp_sppark: pallas num bases: {}",
+        bases.len()
+    );
+    let bases_concrete = unsafe { &*(bases as *const [C] as *const [crate::pasta::EpAffine]) };
+    let coeffs_concrete = unsafe { &*(coeffs as *const [C::Scalar] as *const [crate::pasta::Fq]) };
+    let point = pasta_msm::pallas(bases_concrete, coeffs_concrete);
+    unsafe { *(&point as *const crate::pasta::Ep as *const C::Curve) }
+}
+
+#[cfg(feature = "sppark")]
+fn multiexp_sppark_vesta<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    debug!(
+        "vmx: halo2: multiexp_sppark: vesta num bases: {}",
+        bases.len()
+    );
+    let bases_concrete = unsafe { &*(bases as *const [C] as *const [crate::pasta::EqAffine]) };
+    let coeffs_concrete = unsafe { &*(coeffs as *const [C::Scalar] as *const [crate::pasta::Fp]) };
+    let point = pasta_msm::vesta(bases_concrete, coeffs_concrete);
+    unsafe { *(&point as *const crate::pasta::Eq as *const C::Curve) }
+}
+
+#[cfg(not(any(feature = "cuda", feature = "opencl", feature = "sppark")))]
 pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     best_multiexp_halo2(coeffs, bases)
 }
@@ -155,6 +181,17 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     multiexp_gpu(coeffs, bases)
+}
+
+#[cfg(feature = "sppark")]
+pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    if TypeId::of::<C::Scalar>() == TypeId::of::<crate::pasta::Fq>() {
+        multiexp_sppark_pallas(coeffs, bases)
+    } else if TypeId::of::<C::Scalar>() == TypeId::of::<crate::pasta::Fp>() {
+        multiexp_sppark_vesta(coeffs, bases)
+    } else {
+        unreachable!("unsupported curve: {:?}", TypeId::of::<C::Scalar>())
+    }
 }
 
 /// Performs a multi-exponentiation operation.

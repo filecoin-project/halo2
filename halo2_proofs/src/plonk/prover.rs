@@ -45,7 +45,10 @@ pub fn create_proof<
     instances: &[&[&[C::Scalar]]],
     mut rng: R,
     transcript: &mut T,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    C::ScalarExt: serde::Serialize + serde::de::DeserializeOwned,
+{
     if circuits.len() != instances.len() {
         return Err(Error::InvalidInstances);
     }
@@ -132,6 +135,7 @@ pub fn create_proof<
         pub advice_blinds: Vec<Blind<C::Scalar>>,
     }
 
+    dbg!();
     let advice: Vec<AdviceSingle<C>> = circuits
         .iter()
         .zip(instances.iter())
@@ -335,10 +339,12 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    dbg!();
 
     // Create polynomial evaluator context for values.
     let mut value_evaluator = poly::new_evaluator(|| {});
 
+    dbg!();
     // Register fixed values with the polynomial evaluator.
     let fixed_values: Vec<_> = pk
         .fixed_values
@@ -346,6 +352,7 @@ pub fn create_proof<
         .map(|poly| value_evaluator.register_poly(poly.clone()))
         .collect();
 
+    dbg!();
     // Register advice values with the polynomial evaluator.
     let advice_values: Vec<_> = advice
         .iter()
@@ -358,6 +365,7 @@ pub fn create_proof<
         })
         .collect();
 
+    dbg!();
     // Register instance values with the polynomial evaluator.
     let instance_values: Vec<_> = instance
         .iter()
@@ -370,9 +378,11 @@ pub fn create_proof<
         })
         .collect();
 
+    dbg!();
     // Create polynomial evaluator context for cosets.
     let mut coset_evaluator = poly::new_evaluator(|| {});
 
+    dbg!();
     // Register fixed cosets with the polynomial evaluator.
     let fixed_cosets: Vec<_> = pk
         .fixed_cosets
@@ -380,6 +390,7 @@ pub fn create_proof<
         .map(|poly| coset_evaluator.register_poly(poly.clone()))
         .collect();
 
+    dbg!();
     // Register advice cosets with the polynomial evaluator.
     let advice_cosets: Vec<_> = advice
         .iter()
@@ -392,6 +403,7 @@ pub fn create_proof<
         })
         .collect();
 
+    dbg!();
     // Register instance cosets with the polynomial evaluator.
     let instance_cosets: Vec<_> = instance
         .iter()
@@ -404,6 +416,7 @@ pub fn create_proof<
         })
         .collect();
 
+    dbg!();
     // Register permutation cosets with the polynomial evaluator.
     let permutation_cosets: Vec<_> = pk
         .permutation
@@ -412,14 +425,17 @@ pub fn create_proof<
         .map(|poly| coset_evaluator.register_poly(poly.clone()))
         .collect();
 
+    dbg!();
     // Register boundary polynomials used in the lookup and permutation arguments.
     let l0 = coset_evaluator.register_poly(pk.l0.clone());
     let l_blind = coset_evaluator.register_poly(pk.l_blind.clone());
     let l_last = coset_evaluator.register_poly(pk.l_last.clone());
 
+    dbg!();
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
 
+    dbg!();
     let lookups: Vec<Vec<lookup::prover::Permuted<C, _>>> = instance_values
         .iter()
         .zip(instance_cosets.iter())
@@ -453,12 +469,15 @@ pub fn create_proof<
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    dbg!();
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
 
+    dbg!();
     // Sample gamma challenge
     let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
 
+    dbg!();
     // Commit to permutations.
     let permutations: Vec<permutation::prover::Committed<C, _>> = instance
         .iter()
@@ -480,6 +499,7 @@ pub fn create_proof<
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    dbg!();
     let lookups: Vec<Vec<lookup::prover::Committed<C, _>>> = lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
@@ -501,12 +521,15 @@ pub fn create_proof<
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    dbg!();
     // Commit to the vanishing argument's random polynomial for blinding h(x_3)
     let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
 
+    dbg!();
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
 
+    dbg!();
     // Evaluate the h(X) polynomial's constraint system expressions for the permutation constraints.
     let (permutations, permutation_expressions): (Vec<_>, Vec<_>) = permutations
         .into_iter()
@@ -529,6 +552,7 @@ pub fn create_proof<
         })
         .unzip();
 
+    dbg!();
     let (lookups, lookup_expressions): (Vec<Vec<_>>, Vec<Vec<_>>) = lookups
         .into_iter()
         .map(|lookups| {
@@ -540,6 +564,7 @@ pub fn create_proof<
         })
         .unzip();
 
+    dbg!();
     let expressions = advice_cosets
         .iter()
         .zip(instance_cosets.iter())
@@ -584,6 +609,7 @@ pub fn create_proof<
             },
         );
 
+    dbg!();
     // Construct the vanishing argument's h(X) commitments
     let vanishing = vanishing.construct(
         params,
@@ -595,9 +621,11 @@ pub fn create_proof<
         transcript,
     )?;
 
+    dbg!();
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow(&[params.n as u64, 0, 0, 0]);
 
+    dbg!();
     // Compute and hash instance evals for each circuit instance
     for instance in instance.iter() {
         // Evaluate polynomials at omega^i x
@@ -618,6 +646,7 @@ pub fn create_proof<
         }
     }
 
+    dbg!();
     // Compute and hash advice evals for each circuit instance
     for advice in advice.iter() {
         // Evaluate polynomials at omega^i x
@@ -638,6 +667,7 @@ pub fn create_proof<
         }
     }
 
+    dbg!();
     // Compute and hash fixed evals (shared across all circuit instances)
     let fixed_evals: Vec<_> = meta
         .fixed_queries
@@ -647,22 +677,27 @@ pub fn create_proof<
         })
         .collect();
 
+    dbg!();
     // Hash each fixed column evaluation
     for eval in fixed_evals.iter() {
         transcript.write_scalar(*eval)?;
     }
 
+    dbg!();
     let vanishing = vanishing.evaluate(x, xn, domain, transcript)?;
 
+    dbg!();
     // Evaluate common permutation data
     pk.permutation.evaluate(x, transcript)?;
 
+    dbg!();
     // Evaluate the permutations, if any, at omega^i x.
     let permutations: Vec<permutation::prover::Evaluated<C>> = permutations
         .into_iter()
         .map(|permutation| -> Result<_, _> { permutation.evaluate(pk, x, transcript) })
         .collect::<Result<Vec<_>, _>>()?;
 
+    dbg!();
     // Evaluate the lookups, if any, at omega^i x.
     let lookups: Vec<Vec<lookup::prover::Evaluated<C>>> = lookups
         .into_iter()
@@ -674,6 +709,7 @@ pub fn create_proof<
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    dbg!();
     let instances = instance
         .iter()
         .zip(advice.iter())
@@ -721,6 +757,7 @@ pub fn create_proof<
         // We query the h(X) polynomial at x
         .chain(vanishing.open(x));
 
+    dbg!();
     multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)
 }
 

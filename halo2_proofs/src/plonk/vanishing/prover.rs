@@ -76,17 +76,26 @@ impl<C: CurveAffine> Committed<C> {
         y: ChallengeY<C>,
         mut rng: R,
         transcript: &mut T,
-    ) -> Result<Constructed<C>, Error> {
+    ) -> Result<Constructed<C>, Error>
+    where
+        C::ScalarExt: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        dbg!();
         // Evaluate the h(X) polynomial's constraint system expressions for the constraints provided
         let h_poly = poly::Ast::distribute_powers(expressions, *y); // Fold the gates together with the y challenge
+        dbg!();
+        // NOTE vmx 2022-10-12: This is the evaulation that takes so long as the AST is huuuuuuge.
         let h_poly = evaluator.evaluate(&h_poly, domain); // Evaluate the h(X) polynomial
 
+        dbg!();
         // Divide by t(X) = X^{params.n} - 1.
         let h_poly = domain.divide_by_vanishing_poly(h_poly);
 
+        dbg!();
         // Obtain final h(X) polynomial
         let h_poly = domain.extended_to_coeff(h_poly);
 
+        dbg!();
         // Split h(X) up into pieces
         let h_pieces = h_poly
             .chunks_exact(params.n as usize)
@@ -98,6 +107,7 @@ impl<C: CurveAffine> Committed<C> {
             .map(|_| Blind(C::Scalar::random(&mut rng)))
             .collect();
 
+        dbg!();
         // Compute commitments to each h(X) piece
         let h_commitments_projective: Vec<_> = h_pieces
             .iter()
@@ -108,6 +118,7 @@ impl<C: CurveAffine> Committed<C> {
         C::Curve::batch_normalize(&h_commitments_projective, &mut h_commitments);
         let h_commitments = h_commitments;
 
+        dbg!();
         // Hash each h(X) piece
         for c in h_commitments.iter() {
             transcript.write_point(*c)?;

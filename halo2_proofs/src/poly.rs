@@ -7,6 +7,7 @@ use crate::plonk::Assigned;
 
 use group::ff::{BatchInvert, Field};
 use pasta_curves::arithmetic::FieldExt;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::io;
 use std::marker::PhantomData;
@@ -20,7 +21,7 @@ mod evaluator;
 pub mod multiopen;
 
 pub use domain::*;
-pub(crate) use evaluator::*;
+pub use evaluator::*;
 
 /// This is an error that could occur during proving or circuit synthesis.
 // TODO: these errors need to be cleaned up
@@ -41,19 +42,19 @@ pub struct Coeff;
 impl Basis for Coeff {}
 
 /// The polynomial is defined as coefficients of Lagrange basis polynomials
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct LagrangeCoeff;
 impl Basis for LagrangeCoeff {}
 
 /// The polynomial is defined as coefficients of Lagrange basis polynomials in
 /// an extended size domain which supports multiplication
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ExtendedLagrangeCoeff;
 impl Basis for ExtendedLagrangeCoeff {}
 
 /// Represents a univariate polynomial defined over a field and a particular
 /// basis.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Polynomial<F, B> {
     values: Vec<F>,
     _marker: PhantomData<B>,
@@ -134,18 +135,38 @@ impl<F, B> Polynomial<F, B> {
         self.values.len()
     }
 
-    /// Writes polynomial to a buffer.
+    /// Transmutes the polynomial into bytes.
     #[allow(unsafe_code)]
+    pub fn as_bytes(&self) -> &[u8] {
+        let bytes_len = self.values.len() * mem::size_of::<F>();
+        let bytes = unsafe { slice::from_raw_parts(self.values.as_ptr() as *const u8, bytes_len) };
+        bytes
+    }
+
+    /// Writes polynomial to a buffer.
     pub fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
         let len =
             u32::try_from(self.values.len()).expect("Polynomials have less then 2^32 elements");
         writer.write_all(&len.to_le_bytes())?;
 
-        let bytes_len = self.values.len() * mem::size_of::<F>();
-        let bytes = unsafe { slice::from_raw_parts(self.values.as_ptr() as *const u8, bytes_len) };
+        let bytes = self.as_bytes();
         writer.write_all(&bytes)?;
 
         Ok(())
+    }
+
+    /// Transmutes the bytes into a polynomial.
+    pub fn from_bytes(data: Vec<u8>) -> Self {
+        let len = data.len() / mem::size_of::<F>();
+        // Make sure the memory is not freed.
+        let mut buffer_no_drop = mem::ManuallyDrop::new(data);
+        let values =
+            unsafe { Vec::from_raw_parts(buffer_no_drop.as_mut_ptr() as *mut F, len, len) };
+
+        Polynomial {
+            values,
+            _marker: PhantomData,
+        }
     }
 
     /// Reads polynomoal from a buffer.
@@ -162,15 +183,8 @@ impl<F, B> Polynomial<F, B> {
         let mut buffer = vec![0; len * mem::size_of::<F>()];
         reader.read_exact(&mut buffer[..])?;
 
-        // Make sure the memory is not freed.
-        let mut buffer_no_drop = mem::ManuallyDrop::new(buffer);
-        let values =
-            unsafe { Vec::from_raw_parts(buffer_no_drop.as_mut_ptr() as *mut F, len, len) };
-
-        Ok(Polynomial {
-            values,
-            _marker: PhantomData,
-        })
+        let polynomial = Self::from_bytes(buffer);
+        Ok(polynomial)
     }
 }
 
@@ -296,6 +310,7 @@ impl<F: Clone + Copy, B> Polynomial<F, B> {
         chunk_size: usize,
         chunk_index: usize,
     ) -> Vec<F> {
+        //println!("vmx: get_chunk_of_rotated_helper: negative, abs, chunk size, chunk index: {} {} {} {}", rotation_is_negative, rotation_abs, chunk_size, chunk_index);
         // Compute the lengths such that when applying the rotation, the first `mid`
         // coefficients move to the end, and the last `k` coefficients move to the front.
         // The coefficient previously at `mid` will be the first coefficient in the
@@ -312,21 +327,26 @@ impl<F: Clone + Copy, B> Polynomial<F, B> {
             let k = self.len() - mid;
             (mid, k)
         };
+        //println!("vmx: get_chunk_of_rotated_helper: mid, k, len, abs: {} {} {} {}", mid, k, self.len(), rotation_abs);
 
         // Compute [chunk_start..chunk_end], the range of the chunk within the rotated
         // polynomial.
         let chunk_start = chunk_size * chunk_index;
         let chunk_end = self.len().min(chunk_size * (chunk_index + 1));
+        //println!("vmx: get_chunk_of_rotated_helper: chunk_start, chunk_end: {} {}", chunk_start, chunk_end);
 
         if chunk_end < k {
             // The chunk is entirely in the last `k` coefficients of the unrotated
             // polynomial.
+            //println!("vmx: get_chunk_of_rotated_helper: range1: {} {}", mid + chunk_start, mid + chunk_end);
             self.values[mid + chunk_start..mid + chunk_end].to_vec()
         } else if chunk_start >= k {
             // The chunk is entirely in the first `mid` coefficients of the unrotated
             // polynomial.
+            //println!("vmx: get_chunk_of_rotated_helper: range2: {} {}", chunk_start - k, chunk_end - k);
             self.values[chunk_start - k..chunk_end - k].to_vec()
         } else {
+            //println!("vmx: poly get of rotated helper: range3: {} {}", mid + chunk_start, chunk_end - k);
             // The chunk falls across the boundary between the last `k` and first `mid`
             // coefficients of the unrotated polynomial. Splice the halves together.
             let chunk = self.values[mid + chunk_start..]
@@ -357,7 +377,7 @@ impl<F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
 /// Describes the relative rotation of a vector. Negative numbers represent
 /// reverse (leftmost) rotations and positive numbers represent forward (rightmost)
 /// rotations. Zero represents no rotation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Rotation(pub i32);
 
 impl Rotation {
