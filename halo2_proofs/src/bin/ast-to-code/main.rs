@@ -481,16 +481,19 @@ fn main() {
     let mut buffer = [0u8; 4];
     polys_file.read_exact(&mut buffer[..]).unwrap();
     let num_polys = usize::try_from(u32::from_le_bytes(buffer)).unwrap();
+    println!("num polys: {}", num_polys);
     polys_file.read_exact(&mut buffer[..]).unwrap();
     let poly_len = usize::try_from(u32::from_le_bytes(buffer)).unwrap();
+    println!("poly len: {}", poly_len);
+    println!("polys byte size: {}", num_polys * poly_len * mem::size_of::<Fp>());
     // Linear memory of all the polynomials.
     let mut polys_bytes = vec![0; num_polys * poly_len * mem::size_of::<Fp>()];
     polys_file.read_exact(&mut polys_bytes).unwrap();
     let polys: Vec<_> = (0..num_polys)
         .map(|offset| {
-            //let mut buffer = vec![0; poly_len * mem::size_of::<Fp>()];
-            //polys_file.read_exact(&mut buffer[..]).unwrap();
-            let buffer = polys_bytes[offset * poly_len..(offset + 1) * poly_len].to_vec();
+            let start = offset * poly_len * mem::size_of::<Fp>();
+            let end = (offset + 1) * poly_len * mem::size_of::<Fp>();
+            let buffer = polys_bytes[start..end].to_vec();
             Polynomial::<Fp, ExtendedLagrangeCoeff>::from_bytes(buffer)
         })
         .collect();
