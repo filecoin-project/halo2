@@ -105,39 +105,41 @@ fn to_fp_from_raw<F: PrimeField>(elem: &F) -> String {
 }
 
 fn to_fp_to_cuda<F: PrimeField>(elem: &F) -> String {
-    let repr = elem.to_repr();
+    let bytes = unsafe {
+        std::slice::from_raw_parts(elem as *const F as *const u8, mem::size_of_val(elem))
+    };
     let mut result = "{ { ".to_string();
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[0..4].try_into().unwrap())
+        u32::from_le_bytes(bytes[0..4].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[4..8].try_into().unwrap())
+        u32::from_le_bytes(bytes[4..8].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[8..12].try_into().unwrap())
+        u32::from_le_bytes(bytes[8..12].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[12..16].try_into().unwrap())
+        u32::from_le_bytes(bytes[12..16].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[16..20].try_into().unwrap())
+        u32::from_le_bytes(bytes[16..20].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[20..24].try_into().unwrap())
+        u32::from_le_bytes(bytes[20..24].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x},",
-        u32::from_le_bytes(repr.as_ref()[24..28].try_into().unwrap())
+        u32::from_le_bytes(bytes[24..28].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:08x}",
-        u32::from_le_bytes(repr.as_ref()[28..32].try_into().unwrap())
+        u32::from_le_bytes(bytes[28..32].try_into().unwrap())
     ));
     result.push_str(" } }");
     result
@@ -485,7 +487,10 @@ fn main() {
     polys_file.read_exact(&mut buffer[..]).unwrap();
     let poly_len = usize::try_from(u32::from_le_bytes(buffer)).unwrap();
     println!("poly len: {}", poly_len);
-    println!("polys byte size: {}", num_polys * poly_len * mem::size_of::<Fp>());
+    println!(
+        "polys byte size: {}",
+        num_polys * poly_len * mem::size_of::<Fp>()
+    );
     // Linear memory of all the polynomials.
     let mut polys_bytes = vec![0; num_polys * poly_len * mem::size_of::<Fp>()];
     polys_file.read_exact(&mut polys_bytes).unwrap();
@@ -494,9 +499,17 @@ fn main() {
             let start = offset * poly_len * mem::size_of::<Fp>();
             let end = (offset + 1) * poly_len * mem::size_of::<Fp>();
             let buffer = polys_bytes[start..end].to_vec();
+            //if offset == 0 {
+            //    println!("vmx: offset 0, buffer[0]: {:?}", buffer[0]);
+            //}
             Polynomial::<Fp, ExtendedLagrangeCoeff>::from_bytes(buffer)
         })
         .collect();
+
+    //println!("vmx: poly[0][0]: {:?}", polys[0][0]);
+    //println!("vmx: poly[0][1]: {:?}", polys[0][1]);
+    //println!("vmx: poly[0][2]: {:?}", polys[0][2]);
+    //println!("vmx: poly[0][3]: {:?}", polys[0][3]);
 
     println!("evaluating");
     let domain = EvaluationDomain::<Fp>::new(j, k);
