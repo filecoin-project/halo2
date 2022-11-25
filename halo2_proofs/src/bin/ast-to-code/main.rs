@@ -146,23 +146,25 @@ fn to_fp_to_cuda<F: PrimeField>(elem: &F) -> String {
 }
 
 fn to_fp_to_opencl<F: PrimeField>(elem: &F) -> String {
-    let repr = elem.to_repr();
+    let bytes = unsafe {
+        std::slice::from_raw_parts(elem as *const F as *const u8, mem::size_of_val(elem))
+    };
     let mut result = "{ { ".to_string();
     result.push_str(&format!(
         "0x{:016x},",
-        u64::from_le_bytes(repr.as_ref()[0..8].try_into().unwrap())
+        u64::from_le_bytes(bytes[0..8].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:016x},",
-        u64::from_le_bytes(repr.as_ref()[8..16].try_into().unwrap())
+        u64::from_le_bytes(bytes[8..16].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:016x},",
-        u64::from_le_bytes(repr.as_ref()[16..24].try_into().unwrap())
+        u64::from_le_bytes(bytes[16..24].try_into().unwrap())
     ));
     result.push_str(&format!(
         "0x{:016x}",
-        u64::from_le_bytes(repr.as_ref()[24..32].try_into().unwrap())
+        u64::from_le_bytes(bytes[24..32].try_into().unwrap())
     ));
     result.push_str(" } }");
     result
