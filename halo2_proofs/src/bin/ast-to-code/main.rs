@@ -190,6 +190,22 @@ fn polys_to_bytes(polys: &[Polynomial<Fp, ExtendedLagrangeCoeff>]) -> Vec<u8> {
     bytes
 }
 
+/// Converts a linear buffer of polynomials into a vector of `Polynomial`.
+fn bytes_to_polys(
+    bytes: &[u8],
+    num_polys: usize,
+    poly_len: usize,
+) -> Vec<Polynomial<Fp, ExtendedLagrangeCoeff>> {
+    (0..num_polys)
+        .map(|offset| {
+            let start = offset * poly_len * mem::size_of::<Fp>();
+            let end = (offset + 1) * poly_len * mem::size_of::<Fp>();
+            let buffer = bytes[start..end].to_vec();
+            Polynomial::<Fp, ExtendedLagrangeCoeff>::from_bytes(buffer)
+        })
+        .collect()
+}
+
 // Based on poly/evaluator.rs.
 /// Traverse the AST and generate source code.
 ///
@@ -453,7 +469,10 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
-        println!("Usage: {} <ast-file> <polys-file> <eval|gen>", args[0]);
+        println!(
+            "Usage: {} <ast-file> <polys-file> <eval|gen|cuda|stack>",
+            args[0]
+        );
         process::exit(1);
     }
 
@@ -496,22 +515,6 @@ fn main() {
     // Linear memory of all the polynomials.
     let mut polys_bytes = vec![0; num_polys * poly_len * mem::size_of::<Fp>()];
     polys_file.read_exact(&mut polys_bytes).unwrap();
-    let polys: Vec<_> = (0..num_polys)
-        .map(|offset| {
-            let start = offset * poly_len * mem::size_of::<Fp>();
-            let end = (offset + 1) * poly_len * mem::size_of::<Fp>();
-            let buffer = polys_bytes[start..end].to_vec();
-            //if offset == 0 {
-            //    println!("vmx: offset 0, buffer[0]: {:?}", buffer[0]);
-            //}
-            Polynomial::<Fp, ExtendedLagrangeCoeff>::from_bytes(buffer)
-        })
-        .collect();
-
-    //println!("vmx: poly[0][0]: {:?}", polys[0][0]);
-    //println!("vmx: poly[0][1]: {:?}", polys[0][1]);
-    //println!("vmx: poly[0][2]: {:?}", polys[0][2]);
-    //println!("vmx: poly[0][3]: {:?}", polys[0][3]);
 
     println!("evaluating");
     let domain = EvaluationDomain::<Fp>::new(j, k);
@@ -531,12 +534,16 @@ fn main() {
 
     match &mode[..] {
         "eval" => {
+            let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
+
             let evaluator = Evaluator { polys, _context: 0 };
             let result = evaluator.evaluate(&ast, &domain);
             //let result = evaluator.evaluate(&ast_subset, &domain);
             println!("result full: {:?}", result[0]);
         }
         "gen" => {
+            let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
+
             let ctx = AstContext {
                 domain: &domain,
                 poly_len,
@@ -582,6 +589,8 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             println!("result (gen) full: {:?}", result[0]);
         }
         "cuda" => {
+            let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
+
             let ctx = AstContext {
                 domain: &domain,
                 poly_len,
@@ -711,8 +720,14 @@ KERNEL void evaluate(GLOBAL FIELD polys[][POLY_LEN], GLOBAL FIELD* result, uint 
             //    .collect::<Vec<_>>();
             //println!("result (cuda) full: {:?}", result[0]);
         }
+        "stack" => {
+            println!("vmx: stack:");
+        }
         _ => {
-            panic!("Unknown mode `{}`, use `eval`, `gen` or `cuda`", mode)
+            panic!(
+                "Unknown mode `{}`, use `eval`, `gen`, `cuda` or `stack`",
+                mode
+            )
         }
     }
 }
