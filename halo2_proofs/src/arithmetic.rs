@@ -7,6 +7,7 @@ use group::{
     ff::{BatchInvert, PrimeField},
     Group as _,
 };
+use log::debug;
 
 pub use pasta_curves::arithmetic::*;
 
@@ -124,11 +125,12 @@ pub fn small_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::C
     acc
 }
 
+// TODO vxm 2022-11-28: proper error handling.
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
     coeffs: &[G::Scalar],
     bases: &[G],
-) -> G::Curve {
+) -> Result<G::Curve, ()> {
     use ec_gpu_gen::{multiexp::MultiexpKernel, rust_gpu_tools::Device, threadpool::Worker};
     use std::sync::Arc;
 
@@ -137,14 +139,14 @@ fn multiexp_gpu<G: group::prime::PrimeCurveAffine + ec_gpu::GpuName>(
         .iter()
         .map(|device| ec_gpu_gen::program!(device))
         .collect::<Result<_, _>>()
-        .unwrap();
-    let mut kernel = MultiexpKernel::create(programs, &devices).unwrap();
+        .map_err(|_| ())?;
+    let mut kernel = MultiexpKernel::create(programs, &devices).map_err(|_| ())?;
     let pool = Worker::new();
 
     let coeffs = coeffs.into_iter().map(|fr| fr.to_repr()).collect();
     kernel
         .multiexp(&pool, Arc::new(bases.to_vec()), Arc::new(coeffs), 0)
-        .unwrap()
+        .map_err(|_| ())
 }
 
 #[cfg(not(any(feature = "cuda", feature = "opencl")))]
@@ -154,7 +156,10 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
-    multiexp_gpu(coeffs, bases)
+    multiexp_gpu(coeffs, bases).unwrap_or_else(|_| {
+        debug!("GPU error, falling back to CPU");
+        best_multiexp_halo2(coeffs, bases)
+    })
 }
 
 /// Performs a multi-exponentiation operation.
@@ -191,8 +196,9 @@ pub fn best_multiexp_halo2<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) ->
     }
 }
 
+// TODO vxm 2022-11-28: proper error handling.
 #[cfg(any(feature = "cuda", feature = "opencl"))]
-fn fft_gpu<F: PrimeField + ec_gpu::GpuName>(a: &mut [F], omega: F, log_n: u32) {
+fn fft_gpu<F: PrimeField + ec_gpu::GpuName>(a: &mut [F], omega: F, log_n: u32) -> Result<(), ()> {
     use ec_gpu_gen::{fft::FftKernel, rust_gpu_tools::Device};
 
     let devices = Device::all();
@@ -200,12 +206,12 @@ fn fft_gpu<F: PrimeField + ec_gpu::GpuName>(a: &mut [F], omega: F, log_n: u32) {
         .iter()
         .map(|device| ec_gpu_gen::program!(device))
         .collect::<Result<_, _>>()
-        .unwrap();
-    let mut kernel = FftKernel::create(programs).unwrap();
+        .map_err(|_| ())?;
+    let mut kernel = FftKernel::create(programs).map_err(|_| ())?;
 
     kernel
         .radix_fft_many(&mut [a][..], &[omega], &[log_n])
-        .unwrap();
+        .map_err(|_| ())
 }
 
 #[cfg(not(any(feature = "cuda", feature = "opencl")))]
@@ -222,7 +228,10 @@ pub fn best_fft<G: Group>(a: &mut [G], omega: G::Scalar, log_n: u32) {
         // We know that the `Group` is really a field, hence transmute it, to make it work with the
         // GPU code.
         let a = unsafe { &mut *(a as *mut [G] as *mut [G::Scalar]) };
-        fft_gpu(a, omega, log_n)
+        fft_gpu(a, omega, log_n).unwrap_or_else(|_| {
+            debug!("GPU error, falling back to CPU");
+            best_fft_halo2(a, omega, log_n)
+        })
     } else {
         best_fft_halo2(a, omega, log_n)
     }
