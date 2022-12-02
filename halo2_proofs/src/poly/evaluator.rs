@@ -204,11 +204,12 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         );
         //// NOTE vmx 2022-10-12: Don't chunk it and see what happens.
         //let chunk_size = poly_len;
-        //log::debug!(
-        //    "vmx: halo2: poly: evalutator: evaluate: num polys, poly_len: {} {}",
-        //    self.polys.len(),
-        //    poly_len
-        //);
+
+        log::debug!(
+           "vmx: halo2: poly: evalutator: evaluate: num polys, poly_len: {} {}",
+           self.polys.len(),
+           poly_len
+        );
 
         struct AstContext<'a, F: FieldExt, B: Basis> {
             domain: &'a EvaluationDomain<F>,
