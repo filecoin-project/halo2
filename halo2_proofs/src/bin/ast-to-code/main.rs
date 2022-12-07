@@ -1,6 +1,5 @@
 use std::{
-    cmp,
-    env,
+    cmp, env,
     fs::{self, File},
     io::{Read, Write},
     mem,
@@ -63,25 +62,24 @@ struct AstReturn {
     source: Vec<String>,
 }
 
-fn get_of_rotated_pos(
-    pos: usize,
-    rotation_is_negative: bool,
-    rotation_abs: usize,
-    poly_len: usize,
-) -> usize {
-    let (mid, k) = if rotation_is_negative {
-        (poly_len - rotation_abs, rotation_abs)
-    } else {
-        (rotation_abs, poly_len - rotation_abs)
-    };
-
-    if pos < k {
-        mid + pos
-    } else {
-        pos - k
-    }
-}
-
+//fn get_of_rotated_pos(
+//    pos: usize,
+//    rotation_is_negative: bool,
+//    rotation_abs: usize,
+//    poly_len: usize,
+//) -> usize {
+//    let (mid, k) = if rotation_is_negative {
+//        (poly_len - rotation_abs, rotation_abs)
+//    } else {
+//        (rotation_abs, poly_len - rotation_abs)
+//    };
+//
+//    if pos < k {
+//        mid + pos
+//    } else {
+//        pos - k
+//    }
+//}
 
 //fn vmx_get_of_rotated_pos(
 //    pos: i32,
@@ -157,24 +155,48 @@ fn get_of_rotated_pos(
 //   }
 //}
 
+//fn vmx_get_of_rotated_pos(
+//    pos: i32,
+//    rotation: i32,
+//    poly_len: i32,
+//) -> usize {
+//    let new_pos = pos + rotation;
+//    // The position is at the beginning, the rotation is negative and so large, that it would
+//    // lead to an out of bounds error.
+//    if new_pos < 0 {
+//        // Hence wrap around and use a position at the end of the polynomial.
+//        (poly_len + new_pos) as usize
+//    }
+//    // The position is at the end, the rotation is positive and so large, that it would lead to an
+//    // out of bounds error.
+//    else if new_pos > poly_len {
+//        // Hence wrap around and use a position at the beginning of the polynomial.
+//        (new_pos - poly_len) as usize
+//    }
+//    // It is outside those range, hence the rotation (being positive or negative) won't lead to an
+//    // out of bounds position.
+//    else {
+//        new_pos as usize
+//    }
+//}
 
-fn vmx_get_of_rotated_pos(
-    pos: i32,
-    rotation: i32,
-    poly_len: i32,
-) -> usize {
-    let new_pos = pos + rotation;
+fn get_of_rotated_pos(pos: usize, rotation: i32, poly_len: usize) -> usize {
+    // Making sure that casting from `i32` to `usize` is OK.
+    debug_assert!(usize::BITS >= 32, "Platform must be >= 32-bit");
+
+    let new_pos =
+        i32::try_from(pos).expect("Polynomial cannot have more then 2^31 coefficients") + rotation;
     // The position is at the beginning, the rotation is negative and so large, that it would
     // lead to an out of bounds error.
     if new_pos < 0 {
         // Hence wrap around and use a position at the end of the polynomial.
-        (poly_len + new_pos) as usize
+        poly_len - new_pos.abs() as usize
     }
     // The position is at the end, the rotation is positive and so large, that it would lead to an
     // out of bounds error.
-    else if new_pos > poly_len {
+    else if new_pos as usize > poly_len {
         // Hence wrap around and use a position at the beginning of the polynomial.
-        (new_pos - poly_len) as usize
+        new_pos as usize - poly_len
     }
     // It is outside those range, hence the rotation (being positive or negative) won't lead to an
     // out of bounds position.
@@ -182,7 +204,6 @@ fn vmx_get_of_rotated_pos(
         new_pos as usize
     }
 }
-
 
 fn to_fp_from_raw<F: PrimeField>(elem: &F) -> String {
     let repr = elem.to_repr();
@@ -583,7 +604,12 @@ fn recurse_stack_machine<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
                 ((1 << (domain.extended_k - domain.k)) * leaf.rotation.0.abs()) as usize;
             // Pushes the field element at `[poly_index][result-of-the-call]`;
             // TODO vmx 2022-12-01: `pos` and `poly_len` are input parameters of the stack machine.
-            instructions.push(format!("get_of_rotated_pos: poly_index={} rotation_is_negative={} rotation={}", leaf.index, leaf.rotation.0 < 0, rotation_abs));
+            instructions.push(format!(
+                "get_of_rotated_pos: poly_index={} rotation_is_negative={} rotation={}",
+                leaf.index,
+                leaf.rotation.0 < 0,
+                rotation_abs
+            ));
             stack_size += 1;
             max_stack_size = cmp::max(max_stack_size, stack_size);
         }
@@ -634,7 +660,11 @@ fn recurse_stack_machine<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
             //instructions.push(format!("push: value={}", to_fp_to_cuda(&zeta_scalar)));
             // Does some calculations and pushes the result.
             // The pos is given as a global variable.
-            instructions.push(format!("linearterm: omega={} zeta={}", to_fp_to_cuda(&omega), to_fp_to_cuda(&zeta_scalar)));
+            instructions.push(format!(
+                "linearterm: omega={} zeta={}",
+                to_fp_to_cuda(&omega),
+                to_fp_to_cuda(&zeta_scalar)
+            ));
             stack_size += 1;
             max_stack_size = cmp::max(max_stack_size, stack_size);
         }
@@ -673,7 +703,8 @@ fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
             instructions.extend_from_slice(&lhs);
             instructions.extend_from_slice(&rhs);
             // Pops two elements, adds them and pushes the result.
-            instructions.push("stack.push(stack.pop().unwrap() + stack.pop().unwrap());".to_string());
+            instructions
+                .push("stack.push(stack.pop().unwrap() + stack.pop().unwrap());".to_string());
         }
         Ast::Mul(AstMul(a, b)) => {
             let lhs = recurse_stack_rust(a, domain);
@@ -681,25 +712,34 @@ fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
             instructions.extend_from_slice(&lhs);
             instructions.extend_from_slice(&rhs);
             // Pops two elements, multiplies them and pushes the result.
-            instructions.push("stack.push(stack.pop().unwrap() * stack.pop().unwrap());".to_string());
+            instructions
+                .push("stack.push(stack.pop().unwrap() * stack.pop().unwrap());".to_string());
         }
         Ast::Scale(a, scalar) => {
             let lhs = recurse_stack_rust(a, domain);
             instructions.extend_from_slice(&lhs);
             // Pops one elements, scales it and pushes the result.
-            instructions.push(format!("stack.push(stack.pop().unwrap() * {});", to_fp_from_raw(scalar)));
+            instructions.push(format!(
+                "stack.push(stack.pop().unwrap() * {});",
+                to_fp_from_raw(scalar)
+            ));
         }
         // This is the entry point of the AST.
         Ast::DistributePowers(terms, base) => {
-            instructions.push(format!("let mut stack = vec![{}];", to_fp_from_raw(&F::zero())));
+            instructions.push(format!(
+                "let mut stack = vec![{}];",
+                to_fp_from_raw(&F::zero())
+            ));
             for term in terms.iter() {
                 let term = recurse_stack_rust(term, domain);
                 instructions.extend_from_slice(&term);
                 // Pushes one element, pops two elements, multiplies them and pushes the result.
                 instructions.push(format!("stack.push({});", to_fp_from_raw(base)));
-                instructions.push("stack.push(stack.pop().unwrap() * stack.pop().unwrap());".to_string());
+                instructions
+                    .push("stack.push(stack.pop().unwrap() * stack.pop().unwrap());".to_string());
                 // Pops two elements, adds then and pushes the result.
-                instructions.push("stack.push(stack.pop().unwrap() + stack.pop().unwrap());".to_string());
+                instructions
+                    .push("stack.push(stack.pop().unwrap() + stack.pop().unwrap());".to_string());
             }
             instructions.push("stack.pop().unwrap()".to_string());
         }
@@ -714,7 +754,11 @@ fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
             // Does some calculations and pushes the result.
             // The pos is given as a global variable.
             // TODO vmx 2022-12-07: Omega is static per domain. so it can be defined once globally.
-            instructions.push(format!("stack.push({}.pow_vartime(&[pos as u64]) * {});", to_fp_from_raw(&omega), to_fp_from_raw(&zeta_scalar)));
+            instructions.push(format!(
+                "stack.push({}.pow_vartime(&[pos as u64]) * {});",
+                to_fp_from_raw(&omega),
+                to_fp_from_raw(&zeta_scalar)
+            ));
         }
         Ast::ConstantTerm(scalar) => {
             // Pushes one element.
@@ -727,7 +771,8 @@ fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
 #[derive(Debug, Clone)]
 enum Instruction<F: FieldExt> {
     /// Pushes the field element at `[poly_index][result-of-the-call]`;
-    ElementGetOfRotatedPos { index: usize, rotation_is_negative: bool, rotation_abs: usize },
+    //ElementGetOfRotatedPos { index: usize, rotation_is_negative: bool, rotation_abs: usize },
+    ElementGetOfRotatedPos { index: usize, rotation: i32 },
     /// Pops two elements, adds them and pushes the result.
     Add,
     /// Pops two elements, multiplies them and pushes the result.
@@ -748,10 +793,13 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
     let mut instructions = Vec::new();
     match ast {
         Ast::Poly(leaf) => {
-            let rotation_abs =
-                ((1 << (domain.extended_k - domain.k)) * leaf.rotation.0.abs()) as usize;
             // Pushes the field element at `[poly_index][result-of-the-call]`;
-            instructions.push(Instruction::ElementGetOfRotatedPos { index: leaf.index, rotation_is_negative: leaf.rotation.0 < 0, rotation_abs });
+            let rotation = i32::try_from(((1 << (domain.extended_k - domain.k)) * leaf.rotation.0))
+                .expect("Polynomial cannot have more then 2^31 coefficients");
+            instructions.push(Instruction::ElementGetOfRotatedPos {
+                index: leaf.index,
+                rotation,
+            });
         }
         Ast::Add(a, b) => {
             let lhs = ast_to_stack_machine_rust(a, domain);
@@ -802,43 +850,47 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
         }
         Ast::ConstantTerm(scalar) => {
             // Pushes one element.
-            instructions.push(Instruction::Push{ element: *scalar });
+            instructions.push(Instruction::Push { element: *scalar });
         }
     };
     instructions
 }
 
 /// Run the stack machine that the given position.
-fn run_stack_machine<F: FieldExt>(instructions: &[Instruction<F>], polys: &[Polynomial<F, ExtendedLagrangeCoeff>], pos: usize, poly_len: usize) -> F {
+fn run_stack_machine<F: FieldExt>(
+    instructions: &[Instruction<F>],
+    polys: &[Polynomial<F, ExtendedLagrangeCoeff>],
+    pos: usize,
+    poly_len: usize,
+) -> F {
     let mut stack = Vec::new();
     for instruction in instructions {
         //println!("vmx: stack: {:?}", stack);
         match instruction {
-            &Instruction::ElementGetOfRotatedPos { index, rotation_is_negative, rotation_abs } => {
-                let rotated_pos = get_of_rotated_pos(pos, rotation_is_negative, rotation_abs, poly_len);
+            &Instruction::ElementGetOfRotatedPos { index, rotation } => {
+                let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
                 stack.push(polys[index][rotated_pos]);
-            },
+            }
             &Instruction::Add => {
                 let lhs = stack.pop().unwrap();
-                let rhs= stack.pop().unwrap();
+                let rhs = stack.pop().unwrap();
                 stack.push(lhs + rhs);
-            },
+            }
             &Instruction::Mul => {
                 let lhs = stack.pop().unwrap();
-                let rhs= stack.pop().unwrap();
+                let rhs = stack.pop().unwrap();
                 stack.push(lhs * rhs);
-            },
+            }
             &Instruction::Scale { scalar } => {
                 let lhs = stack.pop().unwrap();
                 stack.push(lhs * scalar);
-            },
+            }
             &Instruction::Push { element } => {
                 stack.push(element);
-            },
+            }
             &Instruction::LinearTerm { omega, zeta_scalar } => {
-                //println!("vmx: omega, zeta, result: {:?} {:?} {:?}", omega, zeta_scalar, omega.pow_vartime(&[pos as u64]) * zeta_scalar);
                 stack.push(omega.pow_vartime(&[pos as u64]) * zeta_scalar);
-            },
+            }
         }
     }
     stack.pop().unwrap()

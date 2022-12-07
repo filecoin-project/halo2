@@ -206,9 +206,9 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         //let chunk_size = poly_len;
 
         log::debug!(
-           "vmx: halo2: poly: evalutator: evaluate: num polys, poly_len: {} {}",
-           self.polys.len(),
-           poly_len
+            "vmx: halo2: poly: evalutator: evaluate: num polys, poly_len: {} {}",
+            self.polys.len(),
+            poly_len
         );
 
         struct AstContext<'a, F: FieldExt, B: Basis> {
