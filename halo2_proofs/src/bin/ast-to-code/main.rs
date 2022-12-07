@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     env,
     fs::{self, File},
     io::{Read, Write},
@@ -80,6 +81,108 @@ fn get_of_rotated_pos(
         pos - k
     }
 }
+
+
+//fn vmx_get_of_rotated_pos(
+//    pos: i32,
+//    rotation_is_negative: bool,
+//    rotation_abs: usize,
+//    //rotation: i32,
+//    poly_len: usize,
+//) -> usize {
+//    //if rotation_is_negative {
+//    //    let (mid, k) =  (poly_len - rotation_abs, rotation_abs);
+//    //    if pos < k {
+//    //        mid + pos
+//    //    } else {
+//    //        pos - k
+//    //    }
+//    //} else {
+//    //    let (mid, k) = (rotation_abs, poly_len - rotation_abs);
+//    //    if pos < k {
+//    //        mid + pos
+//    //    } else {
+//    //        pos - k
+//    //    }
+//    //}
+//    //if rotation_is_negative {
+//    //    if pos < rotation_abs {
+//    //        pos + (poly_len - rotation_abs)
+//    //    } else {
+//    //        pos - rotation_abs
+//    //    }
+//    //} else {
+//    //    if pos < (poly_len - rotation_abs) {
+//    //        pos + rotation_abs
+//    //    } else {
+//    //        pos - (poly_len - rotation_abs)
+//    //    }
+//    //}
+//
+//    //// This one is not complete, it would need more work.
+//    //let new_pos = pos + rotation;
+//    //if new_pos > 0 {
+//    //    if new_pos < poly_len {
+//    //        new_pos as usize
+//    //    } else {
+//    //        (new_pos - poly_len) as usize
+//    //    }
+//    //} else {
+//    //    (new_pos + poly_len) as usize
+//    //}
+
+//fn vmx_get_of_rotated_pos(
+//   pos: i32,
+//   rotation: i32,
+//   poly_len: i32,
+//) -> usize {
+//   // The position is at the beginning, the rotation is negative and so large, that it would
+//   // lead to an out of bounds error.
+//   if pos + rotation < 0 {
+//       // Hence wrap around and use a position at the end of the polynomial.
+//       debug_assert!(rotation < 0);
+//       (pos + poly_len + rotation) as usize
+//   }
+//   // The position is at the end, the rotation is positive and so large, that it would lead to an
+//   // out of bounds error.
+//   else if pos + rotation > poly_len {
+//       // Hence wrap around and use a position at the beginning of the polynomial.
+//       debug_assert!(rotation > 0);
+//       (pos - poly_len + rotation) as usize
+//   }
+//   // It is outside those range, hence the rotation (being positive or negative) won't lead to an
+//   // out of bounds position.
+//   else {
+//       (pos + rotation) as usize
+//   }
+//}
+
+
+fn vmx_get_of_rotated_pos(
+    pos: i32,
+    rotation: i32,
+    poly_len: i32,
+) -> usize {
+    let new_pos = pos + rotation;
+    // The position is at the beginning, the rotation is negative and so large, that it would
+    // lead to an out of bounds error.
+    if new_pos < 0 {
+        // Hence wrap around and use a position at the end of the polynomial.
+        (poly_len + new_pos) as usize
+    }
+    // The position is at the end, the rotation is positive and so large, that it would lead to an
+    // out of bounds error.
+    else if new_pos > poly_len {
+        // Hence wrap around and use a position at the beginning of the polynomial.
+        (new_pos - poly_len) as usize
+    }
+    // It is outside those range, hence the rotation (being positive or negative) won't lead to an
+    // out of bounds position.
+    else {
+        new_pos as usize
+    }
+}
+
 
 fn to_fp_from_raw<F: PrimeField>(elem: &F) -> String {
     let repr = elem.to_repr();
@@ -465,12 +568,288 @@ fn recurse_gpu<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
     }
 }
 
+/// Traverse the AST and generate a stack machine.
+fn recurse_stack_machine<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
+    ast: &Ast<E, F, B>,
+    domain: &EvaluationDomain<F>,
+) -> Vec<String> {
+    let mut instructions = Vec::new();
+    // The stack starts with a zero field element, hence it's `1`.
+    let mut stack_size = 1;
+    let mut max_stack_size = 0;
+    match ast {
+        Ast::Poly(leaf) => {
+            let rotation_abs =
+                ((1 << (domain.extended_k - domain.k)) * leaf.rotation.0.abs()) as usize;
+            // Pushes the field element at `[poly_index][result-of-the-call]`;
+            // TODO vmx 2022-12-01: `pos` and `poly_len` are input parameters of the stack machine.
+            instructions.push(format!("get_of_rotated_pos: poly_index={} rotation_is_negative={} rotation={}", leaf.index, leaf.rotation.0 < 0, rotation_abs));
+            stack_size += 1;
+            max_stack_size = cmp::max(max_stack_size, stack_size);
+        }
+        Ast::Add(a, b) => {
+            let lhs = recurse_stack_machine(a, domain);
+            let rhs = recurse_stack_machine(b, domain);
+            instructions.extend_from_slice(&lhs);
+            instructions.extend_from_slice(&rhs);
+            // Pops two elements, adds them and pushes the result.
+            instructions.push("add".to_string());
+            stack_size -= 1;
+        }
+        Ast::Mul(AstMul(a, b)) => {
+            let lhs = recurse_stack_machine(a, domain);
+            let rhs = recurse_stack_machine(b, domain);
+            instructions.extend_from_slice(&lhs);
+            instructions.extend_from_slice(&rhs);
+            // Pops two elements, multiplies them and pushes the result.
+            instructions.push("mul".to_string());
+            stack_size -= 1;
+        }
+        Ast::Scale(a, scalar) => {
+            let lhs = recurse_stack_machine(a, domain);
+            instructions.extend_from_slice(&lhs);
+            // Pops one elements, scales it and pushes the result.
+            instructions.push(format!("scale: scalar={}", to_fp_to_cuda(scalar)));
+        }
+        // This is the entry point of the AST.
+        Ast::DistributePowers(terms, base) => {
+            for term in terms.iter() {
+                let term = recurse_stack_machine(term, domain);
+                instructions.extend_from_slice(&term);
+                // Pushes one element, pops two elements, multiplies them and pushes the result.
+                instructions.push(format!("push: value={}", to_fp_to_cuda(base)));
+                instructions.push("mul".to_string());
+                // Pops two elements, adds then and pushes the result.
+                instructions.push("add".to_string());
+                stack_size -= 1;
+            }
+        }
+        Ast::LinearTerm(scalar) => {
+            // NOTE vmx 2022-10-10: This is specific to ExtendedLagrangeCoeff, others work
+            // differently.
+            let omega = domain.get_extended_omega();
+            let zeta_scalar = F::ZETA * scalar;
+            //// Pushes two elements
+            //instructions.push(format!("push: value={}", to_fp_to_cuda(&omega)));
+            //instructions.push(format!("push: value={}", to_fp_to_cuda(&zeta_scalar)));
+            // Does some calculations and pushes the result.
+            // The pos is given as a global variable.
+            instructions.push(format!("linearterm: omega={} zeta={}", to_fp_to_cuda(&omega), to_fp_to_cuda(&zeta_scalar)));
+            stack_size += 1;
+            max_stack_size = cmp::max(max_stack_size, stack_size);
+        }
+        Ast::ConstantTerm(scalar) => {
+            // Pushes one element.
+            instructions.push(format!("push: value={}", to_fp_to_cuda(scalar)));
+            stack_size += 1;
+            max_stack_size = cmp::max(max_stack_size, stack_size);
+        }
+    };
+    instructions
+}
+
+/// Traverse the AST and generate a stack machine in Rust that can be executed.
+fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
+    ast: &Ast<E, F, B>,
+    domain: &EvaluationDomain<F>,
+) -> Vec<String> {
+    let mut instructions = Vec::new();
+    match ast {
+        Ast::Poly(leaf) => {
+            let rotation_abs =
+                ((1 << (domain.extended_k - domain.k)) * leaf.rotation.0.abs()) as usize;
+            // Pushes the field element at `[poly_index][result-of-the-call]`;
+            // TODO vmx 2022-12-01: `pos` and `poly_len` are input parameters of the stack machine.
+            instructions.push(format!(
+                "stack.push(polys[{}][get_of_rotated_pos(pos, {}, {}, POLY_LEN)]);",
+                leaf.index,
+                leaf.rotation.0 < 0,
+                rotation_abs,
+            ));
+        }
+        Ast::Add(a, b) => {
+            let lhs = recurse_stack_rust(a, domain);
+            let rhs = recurse_stack_rust(b, domain);
+            instructions.extend_from_slice(&lhs);
+            instructions.extend_from_slice(&rhs);
+            // Pops two elements, adds them and pushes the result.
+            instructions.push("stack.push(stack.pop().unwrap() + stack.pop().unwrap());".to_string());
+        }
+        Ast::Mul(AstMul(a, b)) => {
+            let lhs = recurse_stack_rust(a, domain);
+            let rhs = recurse_stack_rust(b, domain);
+            instructions.extend_from_slice(&lhs);
+            instructions.extend_from_slice(&rhs);
+            // Pops two elements, multiplies them and pushes the result.
+            instructions.push("stack.push(stack.pop().unwrap() * stack.pop().unwrap());".to_string());
+        }
+        Ast::Scale(a, scalar) => {
+            let lhs = recurse_stack_rust(a, domain);
+            instructions.extend_from_slice(&lhs);
+            // Pops one elements, scales it and pushes the result.
+            instructions.push(format!("stack.push(stack.pop().unwrap() * {});", to_fp_from_raw(scalar)));
+        }
+        // This is the entry point of the AST.
+        Ast::DistributePowers(terms, base) => {
+            instructions.push(format!("let mut stack = vec![{}];", to_fp_from_raw(&F::zero())));
+            for term in terms.iter() {
+                let term = recurse_stack_rust(term, domain);
+                instructions.extend_from_slice(&term);
+                // Pushes one element, pops two elements, multiplies them and pushes the result.
+                instructions.push(format!("stack.push({});", to_fp_from_raw(base)));
+                instructions.push("stack.push(stack.pop().unwrap() * stack.pop().unwrap());".to_string());
+                // Pops two elements, adds then and pushes the result.
+                instructions.push("stack.push(stack.pop().unwrap() + stack.pop().unwrap());".to_string());
+            }
+            instructions.push("stack.pop().unwrap()".to_string());
+        }
+        Ast::LinearTerm(scalar) => {
+            // NOTE vmx 2022-10-10: This is specific to ExtendedLagrangeCoeff, others work
+            // differently.
+            let omega = domain.get_extended_omega();
+            let zeta_scalar = F::ZETA * scalar;
+            //// Pushes two elements
+            //instructions.push(format!("push: value={}", to_fp_to_cuda(&omega)));
+            //instructions.push(format!("push: value={}", to_fp_to_cuda(&zeta_scalar)));
+            // Does some calculations and pushes the result.
+            // The pos is given as a global variable.
+            // TODO vmx 2022-12-07: Omega is static per domain. so it can be defined once globally.
+            instructions.push(format!("stack.push({}.pow_vartime(&[pos as u64]) * {});", to_fp_from_raw(&omega), to_fp_from_raw(&zeta_scalar)));
+        }
+        Ast::ConstantTerm(scalar) => {
+            // Pushes one element.
+            instructions.push(format!("stack.push({});", to_fp_from_raw(scalar)));
+        }
+    };
+    instructions
+}
+
+#[derive(Debug, Clone)]
+enum Instruction<F: FieldExt> {
+    /// Pushes the field element at `[poly_index][result-of-the-call]`;
+    ElementGetOfRotatedPos { index: usize, rotation_is_negative: bool, rotation_abs: usize },
+    /// Pops two elements, adds them and pushes the result.
+    Add,
+    /// Pops two elements, multiplies them and pushes the result.
+    Mul,
+    /// Pops one element, scales it and pushes the result.
+    Scale { scalar: F },
+    /// Pushes one element.
+    Push { element: F },
+    /// Does some calculations and pushes the result.
+    LinearTerm { omega: F, zeta_scalar: F },
+}
+
+/// Traverse the AST and generate a stack machine in Rust that can be executed.
+fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
+    ast: &Ast<E, F, B>,
+    domain: &EvaluationDomain<F>,
+) -> Vec<Instruction<F>> {
+    let mut instructions = Vec::new();
+    match ast {
+        Ast::Poly(leaf) => {
+            let rotation_abs =
+                ((1 << (domain.extended_k - domain.k)) * leaf.rotation.0.abs()) as usize;
+            // Pushes the field element at `[poly_index][result-of-the-call]`;
+            instructions.push(Instruction::ElementGetOfRotatedPos { index: leaf.index, rotation_is_negative: leaf.rotation.0 < 0, rotation_abs });
+        }
+        Ast::Add(a, b) => {
+            let lhs = ast_to_stack_machine_rust(a, domain);
+            let rhs = ast_to_stack_machine_rust(b, domain);
+            instructions.extend_from_slice(&lhs);
+            instructions.extend_from_slice(&rhs);
+            // Pops two elements, adds them and pushes the result.
+            instructions.push(Instruction::Add)
+        }
+        Ast::Mul(AstMul(a, b)) => {
+            let lhs = ast_to_stack_machine_rust(a, domain);
+            let rhs = ast_to_stack_machine_rust(b, domain);
+            instructions.extend_from_slice(&lhs);
+            instructions.extend_from_slice(&rhs);
+            // Pops two elements, multiplies them and pushes the result.
+            instructions.push(Instruction::Mul)
+        }
+        Ast::Scale(a, scalar) => {
+            let lhs = ast_to_stack_machine_rust(a, domain);
+            instructions.extend_from_slice(&lhs);
+            // Pops one element, scales it and pushes the result.
+            instructions.push(Instruction::Scale { scalar: *scalar });
+        }
+        // This is the entry point of the AST.
+        Ast::DistributePowers(terms, base) => {
+            instructions.push(Instruction::Push { element: F::zero() });
+            for term in terms.iter() {
+                instructions.push(Instruction::Push { element: *base });
+                instructions.push(Instruction::Mul);
+                let term = ast_to_stack_machine_rust(term, domain);
+                instructions.extend_from_slice(&term);
+                // Pushes one element, pops two elements, multiplies them and pushes the result.
+                // Pops two elements, adds then and pushes the result.
+                instructions.push(Instruction::Add);
+            }
+        }
+        Ast::LinearTerm(scalar) => {
+            // NOTE vmx 2022-10-10: This is specific to ExtendedLagrangeCoeff, others work
+            // differently.
+            let omega = domain.get_extended_omega();
+            let zeta_scalar = F::ZETA * scalar;
+            //// Pushes two elements
+            //instructions.push(format!("push: value={}", to_fp_to_cuda(&omega)));
+            //instructions.push(format!("push: value={}", to_fp_to_cuda(&zeta_scalar)));
+            // Does some calculations and pushes the result.
+            // TODO vmx 2022-12-07: Omega is static per domain. so it can be defined once globally.
+            instructions.push(Instruction::LinearTerm { omega, zeta_scalar });
+        }
+        Ast::ConstantTerm(scalar) => {
+            // Pushes one element.
+            instructions.push(Instruction::Push{ element: *scalar });
+        }
+    };
+    instructions
+}
+
+/// Run the stack machine that the given position.
+fn run_stack_machine<F: FieldExt>(instructions: &[Instruction<F>], polys: &[Polynomial<F, ExtendedLagrangeCoeff>], pos: usize, poly_len: usize) -> F {
+    let mut stack = Vec::new();
+    for instruction in instructions {
+        //println!("vmx: stack: {:?}", stack);
+        match instruction {
+            &Instruction::ElementGetOfRotatedPos { index, rotation_is_negative, rotation_abs } => {
+                let rotated_pos = get_of_rotated_pos(pos, rotation_is_negative, rotation_abs, poly_len);
+                stack.push(polys[index][rotated_pos]);
+            },
+            &Instruction::Add => {
+                let lhs = stack.pop().unwrap();
+                let rhs= stack.pop().unwrap();
+                stack.push(lhs + rhs);
+            },
+            &Instruction::Mul => {
+                let lhs = stack.pop().unwrap();
+                let rhs= stack.pop().unwrap();
+                stack.push(lhs * rhs);
+            },
+            &Instruction::Scale { scalar } => {
+                let lhs = stack.pop().unwrap();
+                stack.push(lhs * scalar);
+            },
+            &Instruction::Push { element } => {
+                stack.push(element);
+            },
+            &Instruction::LinearTerm { omega, zeta_scalar } => {
+                //println!("vmx: omega, zeta, result: {:?} {:?} {:?}", omega, zeta_scalar, omega.pow_vartime(&[pos as u64]) * zeta_scalar);
+                stack.push(omega.pow_vartime(&[pos as u64]) * zeta_scalar);
+            },
+        }
+    }
+    stack.pop().unwrap()
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
         println!(
-            "Usage: {} <ast-file> <polys-file> <eval|gen|cuda|stack>",
+            "Usage: {} <ast-file> <polys-file> <eval|gen|cuda|stacksrc|stackrust|stackmachinerust>",
             args[0]
         );
         process::exit(1);
@@ -520,16 +899,19 @@ fn main() {
     let domain = EvaluationDomain::<Fp>::new(j, k);
 
     //// AST with the first element only
-    //let ast_subset = match ast {
-    //   Ast::DistributePowers(terms, base) => {
-    //       println!("vmx: num terms: {}", terms.len());
-    //       let subset = terms[38..39].to_vec();
-    //       Ast::DistributePowers(std::sync::Arc::new(subset), base)
-    //   },
-    //   _ => panic!("not supported")
+    ////let ast_subset = match ast {
+    //let ast = match ast {
+    // Ast::DistributePowers(terms, base) => {
+    //     println!("vmx: num terms: {}", terms.len());
+    //     //let subset = terms[38..39].to_vec();
+    //     let subset = terms[140..141].to_vec();
+    //     Ast::DistributePowers(std::sync::Arc::new(subset), base)
+    // },
+    // _ => panic!("not supported")
     //};
-    //
-    //let ast_json = serde_json::to_string(&ast_subset).unwrap();
+
+    ////let ast_json = serde_json::to_string(&ast_subset).unwrap();
+    //let ast_json = serde_json::to_string(&ast).unwrap();
     //println!("vmx: ast:\n{}", ast_json);
 
     match &mode[..] {
@@ -579,14 +961,14 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             let mut outfile = File::create("/tmp/evaluate.rs").unwrap();
             outfile.write_all(source.join("\n").as_bytes()).unwrap();
 
-            //let result = evaluate::evaluate(0, &polys);
-            //println!("result first (manual): {:?}", result);
+            let result = evaluate::evaluate(0, &polys);
+            println!("result first (manual): {:?}", result);
 
-            let result = (0..poly_len)
-                .into_par_iter()
-                .map(|pos| evaluate::evaluate(pos, &polys))
-                .collect::<Vec<_>>();
-            println!("result (gen) full: {:?}", result[0]);
+            //let result = (0..poly_len)
+            //    .into_par_iter()
+            //    .map(|pos| evaluate::evaluate(pos, &polys))
+            //    .collect::<Vec<_>>();
+            //println!("result (gen) full: {:?}", result[0]);
         }
         "cuda" => {
             let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
@@ -720,12 +1102,61 @@ KERNEL void evaluate(GLOBAL FIELD polys[][POLY_LEN], GLOBAL FIELD* result, uint 
             //    .collect::<Vec<_>>();
             //println!("result (cuda) full: {:?}", result[0]);
         }
-        "stack" => {
-            println!("vmx: stack:");
+        "stacksrc" => {
+            let source = recurse_stack_machine(&ast, &domain);
+            //println!("vmx: stack:\n{:?}", result);
+            //print!("stack machine source:");
+            //for line in result {
+            //    println!("{}", line);
+            //}
+            let mut outfile = File::create("/tmp/stackmaschine.txt").unwrap();
+            outfile.write_all(source.join("\n").as_bytes()).unwrap();
+        }
+        "stackrust" => {
+            let stack_machine_source = recurse_stack_rust(&ast, &domain);
+            //println!("vmx: stack:\n{:?}", result);
+            //print!("stack machine source:");
+            //for line in result {
+            //    println!("{}", line);
+            //}
+            let mut source = Vec::new();
+            source.push("#![allow(unused_mut)]".to_string());
+            source.push("use halo2_proofs::{arithmetic::Field, pasta::Fp, poly::{ExtendedLagrangeCoeff, Polynomial}};".to_string());
+            source.push(format!("const POLY_LEN: usize = {};", poly_len));
+            source.push(r#"
+const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs: usize, poly_len: usize) -> usize {
+    let (mid, k) = if rotation_is_negative {
+        (poly_len - rotation_abs, rotation_abs)
+    } else {
+         (rotation_abs, poly_len - rotation_abs)
+    };
+
+    if pos < k {
+        mid + pos
+    } else {
+        pos - k
+    }
+}"#.to_string());
+            source.push("pub fn evaluate(pos: usize, polys: &[Polynomial<Fp, ExtendedLagrangeCoeff>]) -> Fp {".to_string());
+            source.extend_from_slice(&stack_machine_source);
+            source.push("}".to_string());
+            let mut outfile = File::create("/tmp/stackrust.rs").unwrap();
+            outfile.write_all(source.join("\n").as_bytes()).unwrap();
+        }
+        "stackmachinerust" => {
+            let stack_machine = ast_to_stack_machine_rust(&ast, &domain);
+            //println!("vmx: stackmachine:\n{:?}", stack_machine);
+            //println!("vmx: stackmachine:");
+            //for instruction in &stack_machine {
+            //    println!("{:?}", instruction);
+            //}
+            let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
+            let result = run_stack_machine(&stack_machine, &polys, 0, poly_len);
+            println!("vmx: stackmachine: {:?}", result);
         }
         _ => {
             panic!(
-                "Unknown mode `{}`, use `eval`, `gen`, `cuda` or `stack`",
+                "Unknown mode `{}`, use `eval`, `gen`, `cuda`, `stacksrc` `stackrust` or `stackmachinerust`",
                 mode
             )
         }
