@@ -772,7 +772,7 @@ fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
 enum Instruction<F: FieldExt> {
     /// Pushes the field element at `[poly_index][result-of-the-call]`;
     //ElementGetOfRotatedPos { index: usize, rotation_is_negative: bool, rotation_abs: usize },
-    ElementGetOfRotatedPos { index: usize, rotation: i32 },
+    ElementGetOfRotatedPos { index: u32, rotation: i32 },
     /// Pops two elements, adds them and pushes the result.
     Add,
     /// Pops two elements, multiplies them and pushes the result.
@@ -807,7 +807,8 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
             let rotation = i32::try_from((1 << (domain.extended_k - domain.k)) * leaf.rotation.0)
                 .expect("Polynomial cannot have more then 2^31 coefficients");
             instructions.push(Instruction::ElementGetOfRotatedPos {
-                index: leaf.index,
+                index: u32::try_from(leaf.index)
+                    .expect("Polynomial cannot have more then 2^32 coefficients"),
                 rotation,
             });
             let stack_size = ctx.stack_size + 1;
@@ -930,7 +931,8 @@ fn run_stack_machine<F: FieldExt>(
         match instruction {
             &Instruction::ElementGetOfRotatedPos { index, rotation } => {
                 let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
-                stack.push(polys[index][rotated_pos]);
+                let index_usize = usize::try_from(index).expect("Platform must be >= 32-bit");
+                stack.push(polys[index_usize][rotated_pos]);
             }
             &Instruction::Add => {
                 let lhs = stack.pop().unwrap();
