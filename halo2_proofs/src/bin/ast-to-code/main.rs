@@ -795,7 +795,7 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
     match ast {
         Ast::Poly(leaf) => {
             // Pushes the field element at `[poly_index][result-of-the-call]`;
-            let rotation = i32::try_from(((1 << (domain.extended_k - domain.k)) * leaf.rotation.0))
+            let rotation = i32::try_from((1 << (domain.extended_k - domain.k)) * leaf.rotation.0)
                 .expect("Polynomial cannot have more then 2^31 coefficients");
             instructions.push(Instruction::ElementGetOfRotatedPos {
                 index: leaf.index,
@@ -841,9 +841,6 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
             // NOTE vmx 2022-10-10: This is specific to ExtendedLagrangeCoeff, others work
             // differently.
             let zeta_scalar = F::ZETA * scalar;
-            //// Pushes two elements
-            //instructions.push(format!("push: value={}", to_fp_to_cuda(&omega)));
-            //instructions.push(format!("push: value={}", to_fp_to_cuda(&zeta_scalar)));
             // Does some calculations and pushes the result.
             instructions.push(Instruction::LinearTerm { zeta_scalar });
         }
