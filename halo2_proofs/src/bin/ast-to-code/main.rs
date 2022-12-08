@@ -786,11 +786,20 @@ enum Instruction<F: FieldExt> {
     LinearTerm { zeta_scalar: F },
 }
 
+/// Contains the instructions and the maximum size of the stack.
+#[derive(Debug, Default)]
+struct StackContext<F: FieldExt> {
+    instructions: Vec<Instruction<F>>,
+    stack_size: usize,
+    max_stack_size: usize,
+}
+
 /// Traverse the AST and generate a stack machine in Rust that can be executed.
 fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
     ast: &Ast<E, F, B>,
     domain: &EvaluationDomain<F>,
-) -> Vec<Instruction<F>> {
+    ctx: &StackContext<F>,
+) -> StackContext<F> {
     let mut instructions = Vec::new();
     match ast {
         Ast::Poly(leaf) => {
@@ -801,40 +810,83 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
                 index: leaf.index,
                 rotation,
             });
+            let stack_size = ctx.stack_size + 1;
+            StackContext {
+                instructions,
+                stack_size,
+                max_stack_size: cmp::max(stack_size, ctx.max_stack_size),
+            }
         }
         Ast::Add(a, b) => {
-            let lhs = ast_to_stack_machine_rust(a, domain);
-            let rhs = ast_to_stack_machine_rust(b, domain);
-            instructions.extend_from_slice(&lhs);
-            instructions.extend_from_slice(&rhs);
+            let lhs = ast_to_stack_machine_rust(a, domain, ctx);
+            let rhs = ast_to_stack_machine_rust(b, domain, &lhs);
+            instructions.extend_from_slice(&lhs.instructions);
+            instructions.extend_from_slice(&rhs.instructions);
             // Pops two elements, adds them and pushes the result.
-            instructions.push(Instruction::Add)
+            instructions.push(Instruction::Add);
+            //let max_stack_size = cmp::max(lhs.max_stack_size, rhs.max_stack_size);
+            StackContext {
+                instructions,
+                stack_size: rhs.stack_size - 1,
+                max_stack_size: cmp::max(rhs.max_stack_size, ctx.max_stack_size),
+            }
         }
         Ast::Mul(AstMul(a, b)) => {
-            let lhs = ast_to_stack_machine_rust(a, domain);
-            let rhs = ast_to_stack_machine_rust(b, domain);
-            instructions.extend_from_slice(&lhs);
-            instructions.extend_from_slice(&rhs);
+            let lhs = ast_to_stack_machine_rust(a, domain, ctx);
+            let rhs = ast_to_stack_machine_rust(b, domain, &lhs);
+            instructions.extend_from_slice(&lhs.instructions);
+            instructions.extend_from_slice(&rhs.instructions);
             // Pops two elements, multiplies them and pushes the result.
-            instructions.push(Instruction::Mul)
+            instructions.push(Instruction::Mul);
+            //let max_stack_size = cmp::max(lhs.max_stack_size, rhs.max_stack_size);
+            StackContext {
+                instructions,
+                stack_size: rhs.stack_size - 1,
+                max_stack_size: cmp::max(rhs.max_stack_size, ctx.max_stack_size),
+            }
         }
         Ast::Scale(a, scalar) => {
-            let lhs = ast_to_stack_machine_rust(a, domain);
-            instructions.extend_from_slice(&lhs);
+            let lhs = ast_to_stack_machine_rust(a, domain, ctx);
+            instructions.extend_from_slice(&lhs.instructions);
             // Pops one element, scales it and pushes the result.
             instructions.push(Instruction::Scale { scalar: *scalar });
+            StackContext {
+                instructions,
+                stack_size: lhs.stack_size,
+                max_stack_size: cmp::max(lhs.max_stack_size, ctx.max_stack_size),
+            }
         }
+        // TODO vmx 2022-12-08: Think about moving this outside this function, as it really is the
+        // entry point and we won't match on it again. This might simplify the code a bit.
         // This is the entry point of the AST.
         Ast::DistributePowers(terms, base) => {
+            let mut max_stack_size = 0;
             instructions.push(Instruction::Push { element: F::zero() });
             for term in terms.iter() {
                 instructions.push(Instruction::Push { element: *base });
                 instructions.push(Instruction::Mul);
-                let term = ast_to_stack_machine_rust(term, domain);
-                instructions.extend_from_slice(&term);
+                let term = ast_to_stack_machine_rust(
+                    term,
+                    domain,
+                    &StackContext {
+                        instructions: Vec::new(),
+                        stack_size: 1,
+                        max_stack_size: 1,
+                    },
+                );
+                instructions.extend_from_slice(&term.instructions);
                 // Pushes one element, pops two elements, multiplies them and pushes the result.
                 // Pops two elements, adds then and pushes the result.
                 instructions.push(Instruction::Add);
+
+                // The stack contains a single element (the result) after processing a single term.
+                // Hence we can take whatever the maximum of all the runs was.
+                max_stack_size = cmp::max(max_stack_size, term.max_stack_size);
+            }
+            StackContext {
+                instructions,
+                stack_size: 1,
+                max_stack_size, //: cmp::max(max_stack_size, ctx.max_stack_size),
             }
         }
         Ast::LinearTerm(scalar) => {
@@ -843,13 +895,24 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
             let zeta_scalar = F::ZETA * scalar;
             // Does some calculations and pushes the result.
             instructions.push(Instruction::LinearTerm { zeta_scalar });
+            let stack_size = ctx.stack_size + 1;
+            StackContext {
+                instructions,
+                stack_size,
+                max_stack_size: cmp::max(stack_size, ctx.max_stack_size),
+            }
         }
         Ast::ConstantTerm(scalar) => {
             // Pushes one element.
             instructions.push(Instruction::Push { element: *scalar });
+            let stack_size = ctx.stack_size + 1;
+            StackContext {
+                instructions,
+                stack_size,
+                max_stack_size: cmp::max(stack_size, ctx.max_stack_size),
+            }
         }
-    };
-    instructions
+    }
 }
 
 /// Run the stack machine that the given position.
@@ -863,6 +926,7 @@ fn run_stack_machine<F: FieldExt>(
     let mut stack = Vec::new();
     for instruction in instructions {
         //println!("vmx: stack: {:?}", stack);
+        //println!("vmx: stack: len: {}", stack.len());
         match instruction {
             &Instruction::ElementGetOfRotatedPos { index, rotation } => {
                 let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
@@ -1193,7 +1257,11 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             outfile.write_all(source.join("\n").as_bytes()).unwrap();
         }
         "stackmachinerust" => {
-            let stack_machine = ast_to_stack_machine_rust(&ast, &domain);
+            let stack_machine = ast_to_stack_machine_rust(&ast, &domain, &StackContext::default());
+            println!(
+                "vmx: stackmachine: max stack size: {:?}",
+                stack_machine.max_stack_size
+            );
             //println!("vmx: stackmachine:\n{:?}", stack_machine);
             //println!("vmx: stackmachine:");
             //for instruction in &stack_machine {
@@ -1201,7 +1269,8 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             //}
             let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
             let omega = domain.get_extended_omega();
-            let result = run_stack_machine(&stack_machine, &omega, &polys, poly_len, 0);
+            let result =
+                run_stack_machine(&stack_machine.instructions, &omega, &polys, poly_len, 0);
             println!("vmx: stackmachine: {:?}", result);
         }
         _ => {
