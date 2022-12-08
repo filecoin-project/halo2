@@ -781,8 +781,9 @@ enum Instruction<F: FieldExt> {
     Scale { scalar: F },
     /// Pushes one element.
     Push { element: F },
-    /// Does some calculations and pushes the result.
-    LinearTerm { omega: F, zeta_scalar: F },
+    /// Does some calculations and pushes the result. The position and omega is passed into the
+    /// stack machine.
+    LinearTerm { zeta_scalar: F },
 }
 
 /// Traverse the AST and generate a stack machine in Rust that can be executed.
@@ -839,14 +840,12 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
         Ast::LinearTerm(scalar) => {
             // NOTE vmx 2022-10-10: This is specific to ExtendedLagrangeCoeff, others work
             // differently.
-            let omega = domain.get_extended_omega();
             let zeta_scalar = F::ZETA * scalar;
             //// Pushes two elements
             //instructions.push(format!("push: value={}", to_fp_to_cuda(&omega)));
             //instructions.push(format!("push: value={}", to_fp_to_cuda(&zeta_scalar)));
             // Does some calculations and pushes the result.
-            // TODO vmx 2022-12-07: Omega is static per domain. so it can be defined once globally.
-            instructions.push(Instruction::LinearTerm { omega, zeta_scalar });
+            instructions.push(Instruction::LinearTerm { zeta_scalar });
         }
         Ast::ConstantTerm(scalar) => {
             // Pushes one element.
@@ -859,9 +858,10 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
 /// Run the stack machine that the given position.
 fn run_stack_machine<F: FieldExt>(
     instructions: &[Instruction<F>],
+    omega: &F,
     polys: &[Polynomial<F, ExtendedLagrangeCoeff>],
-    pos: usize,
     poly_len: usize,
+    pos: usize,
 ) -> F {
     let mut stack = Vec::new();
     for instruction in instructions {
@@ -888,7 +888,7 @@ fn run_stack_machine<F: FieldExt>(
             &Instruction::Push { element } => {
                 stack.push(element);
             }
-            &Instruction::LinearTerm { omega, zeta_scalar } => {
+            &Instruction::LinearTerm { zeta_scalar } => {
                 stack.push(omega.pow_vartime(&[pos as u64]) * zeta_scalar);
             }
         }
@@ -1203,7 +1203,8 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             //    println!("{:?}", instruction);
             //}
             let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
-            let result = run_stack_machine(&stack_machine, &polys, 0, poly_len);
+            let omega = domain.get_extended_omega();
+            let result = run_stack_machine(&stack_machine, &omega, &polys, poly_len, 0);
             println!("vmx: stackmachine: {:?}", result);
         }
         _ => {
