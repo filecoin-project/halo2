@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     mem,
     path::Path,
-    process,
+    process, slice,
 };
 
 use halo2_proofs::pasta::group::ff::PrimeField;
@@ -770,9 +770,6 @@ fn recurse_stack_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
 
 #[derive(Debug, Clone)]
 enum Instruction<F: FieldExt> {
-    /// Pushes the field element at `[poly_index][result-of-the-call]`;
-    //ElementGetOfRotatedPos { index: usize, rotation_is_negative: bool, rotation_abs: usize },
-    ElementGetOfRotatedPos { index: u32, rotation: i32 },
     /// Pops two elements, adds them and pushes the result.
     Add,
     /// Pops two elements, multiplies them and pushes the result.
@@ -784,6 +781,47 @@ enum Instruction<F: FieldExt> {
     /// Does some calculations and pushes the result. The position and omega is passed into the
     /// stack machine.
     LinearTerm { zeta_scalar: F },
+    /// Pushes the field element at `[poly_index][result-of-the-call]`;
+    Rotated { index: u32, rotation: i32 },
+}
+
+fn fieldext_to_bytes<F: FieldExt>(element: &F) -> &[u8] {
+    debug_assert_eq!(mem::size_of::<F>(), 32);
+    unsafe { slice::from_raw_parts(element as *const F as *const u8, mem::size_of::<F>()) }
+}
+
+impl<F: FieldExt> Instruction<F> {
+    /// Converts the instruction into bytes that can be interpreted as a tagged union of structs in
+    /// C.
+    pub fn to_bytes(&self) -> [u8; 33] {
+        let mut bytes = [0; 33];
+        match self {
+            Self::Add => {
+                bytes[0] = 1;
+            }
+            Self::Mul => {
+                bytes[0] = 2;
+            }
+            Self::Scale { scalar } => {
+                bytes[0] = 3;
+                bytes[1..33].copy_from_slice(fieldext_to_bytes(scalar));
+            }
+            Self::Push { element } => {
+                bytes[0] = 4;
+                bytes[1..33].copy_from_slice(fieldext_to_bytes(element));
+            }
+            Self::LinearTerm { zeta_scalar } => {
+                bytes[0] = 5;
+                bytes[1..33].copy_from_slice(fieldext_to_bytes(zeta_scalar));
+            }
+            Self::Rotated { index, rotation } => {
+                bytes[0] = 6;
+                bytes[1..5].copy_from_slice(&index.to_le_bytes());
+                bytes[5..9].copy_from_slice(&rotation.to_le_bytes());
+            }
+        }
+        bytes
+    }
 }
 
 /// Contains the instructions and the maximum size of the stack.
@@ -806,7 +844,7 @@ fn ast_to_stack_machine_rust<E, F: FieldExt + Serialize, B: BasisOps + Serialize
             // Pushes the field element at `[poly_index][result-of-the-call]`;
             let rotation = i32::try_from((1 << (domain.extended_k - domain.k)) * leaf.rotation.0)
                 .expect("Polynomial cannot have more then 2^31 coefficients");
-            instructions.push(Instruction::ElementGetOfRotatedPos {
+            instructions.push(Instruction::Rotated {
                 index: u32::try_from(leaf.index)
                     .expect("Polynomial cannot have more then 2^32 coefficients"),
                 rotation,
@@ -929,11 +967,6 @@ fn run_stack_machine<F: FieldExt>(
         //println!("vmx: stack: {:?}", stack);
         //println!("vmx: stack: len: {}", stack.len());
         match instruction {
-            &Instruction::ElementGetOfRotatedPos { index, rotation } => {
-                let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
-                let index_usize = usize::try_from(index).expect("Platform must be >= 32-bit");
-                stack.push(polys[index_usize][rotated_pos]);
-            }
             &Instruction::Add => {
                 let lhs = stack.pop().unwrap();
                 let rhs = stack.pop().unwrap();
@@ -954,10 +987,19 @@ fn run_stack_machine<F: FieldExt>(
             &Instruction::LinearTerm { zeta_scalar } => {
                 stack.push(omega.pow_vartime(&[pos as u64]) * zeta_scalar);
             }
+            &Instruction::Rotated { index, rotation } => {
+                let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
+                let index_usize = usize::try_from(index).expect("Platform must be >= 32-bit");
+                stack.push(polys[index_usize][rotated_pos]);
+            }
         }
     }
     stack.pop().unwrap()
 }
+//// From https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8/42186553#42186553
+//unsafe fn to_bytes<T: Sized>(p: &T) -> &[u8] {
+//    slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>())
+//}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -1265,10 +1307,18 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
                 stack_machine.max_stack_size
             );
             //println!("vmx: stackmachine:\n{:?}", stack_machine);
-            //println!("vmx: stackmachine:");
-            //for instruction in &stack_machine {
+            println!("vmx: stackmachine:");
+            //for (ii, instruction) in stack_machine.instructions.iter().enumerate() {
             //    println!("{:?}", instruction);
+            //    let mut outfile = File::create(format!("/tmp/instructions/{:0>5}.rs", ii)).unwrap();
+            //    let bytes = instruction.to_bytes();
+            //    outfile.write_all(&bytes).unwrap();
             //}
+            let mut outfile = File::create("/tmp/instructions.dat").unwrap();
+            for instruction in &stack_machine.instructions {
+               let bytes = instruction.to_bytes();
+               outfile.write_all(&bytes).unwrap();
+            }
             let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
             let omega = domain.get_extended_omega();
             let result =
