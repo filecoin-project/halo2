@@ -793,8 +793,8 @@ fn fieldext_to_bytes<F: FieldExt>(element: &F) -> &[u8] {
 impl<F: FieldExt> Instruction<F> {
     /// Converts the instruction into bytes that can be interpreted as a tagged union of structs in
     /// C.
-    pub fn to_bytes(&self) -> [u8; 33] {
-        let mut bytes = [0; 33];
+    pub fn to_bytes(&self) -> [u8; 40] {
+        let mut bytes = [0; 40];
         match self {
             Self::Add => {
                 bytes[0] = 1;
@@ -804,20 +804,20 @@ impl<F: FieldExt> Instruction<F> {
             }
             Self::Scale { scalar } => {
                 bytes[0] = 3;
-                bytes[1..33].copy_from_slice(fieldext_to_bytes(scalar));
+                bytes[8..40].copy_from_slice(fieldext_to_bytes(scalar));
             }
             Self::Push { element } => {
                 bytes[0] = 4;
-                bytes[1..33].copy_from_slice(fieldext_to_bytes(element));
+                bytes[8..40].copy_from_slice(fieldext_to_bytes(element));
             }
             Self::LinearTerm { zeta_scalar } => {
                 bytes[0] = 5;
-                bytes[1..33].copy_from_slice(fieldext_to_bytes(zeta_scalar));
+                bytes[8..40].copy_from_slice(fieldext_to_bytes(zeta_scalar));
             }
             Self::Rotated { index, rotation } => {
                 bytes[0] = 6;
-                bytes[1..5].copy_from_slice(&index.to_le_bytes());
-                bytes[5..9].copy_from_slice(&rotation.to_le_bytes());
+                bytes[8..12].copy_from_slice(&index.to_le_bytes());
+                bytes[12..16].copy_from_slice(&rotation.to_le_bytes());
             }
         }
         bytes
@@ -998,7 +998,7 @@ fn run_stack_machine<F: FieldExt>(
 }
 //// From https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8/42186553#42186553
 //unsafe fn to_bytes<T: Sized>(p: &T) -> &[u8] {
-//    slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>())
+//   slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>())
 //}
 
 fn main() {
@@ -1309,15 +1309,16 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             //println!("vmx: stackmachine:\n{:?}", stack_machine);
             println!("vmx: stackmachine:");
             //for (ii, instruction) in stack_machine.instructions.iter().enumerate() {
-            //    println!("{:?}", instruction);
-            //    let mut outfile = File::create(format!("/tmp/instructions/{:0>5}.rs", ii)).unwrap();
-            //    let bytes = instruction.to_bytes();
-            //    outfile.write_all(&bytes).unwrap();
+            //   println!("{:?}", instruction);
+            //   //let mut outfile = File::create(format!("/tmp/instructions/{:0>5}.rs", ii)).unwrap();
+            //   //let bytes = instruction.to_bytes();
+            //   //outfile.write_all(&bytes).unwrap();
             //}
             let mut outfile = File::create("/tmp/instructions.dat").unwrap();
             for instruction in &stack_machine.instructions {
-               let bytes = instruction.to_bytes();
-               outfile.write_all(&bytes).unwrap();
+                let bytes = instruction.to_bytes();
+                //let bytes = unsafe { to_bytes(instruction) };
+                outfile.write_all(&bytes).unwrap();
             }
             let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
             let omega = domain.get_extended_omega();
