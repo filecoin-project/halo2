@@ -7,20 +7,25 @@ fn main() {
     use ec_gpu_gen::SourceBuilder;
     use pasta_curves::{EpAffine, EqAffine, Fp, Fq};
 
-    let halosource = include_str!("/tmp/evaluate.cu")
-        .to_string()
-        .replace("FIELD", &Fp::name());
+    //let halosource = include_str!("/tmp/evaluate.cu")
+    //    .to_string()
+    //    .replace("FIELD", &Fp::name());
 
     //use std::io::Write;
     //let mut outfile = std::fs::File::create("/tmp/halosource.cu").unwrap();
     //outfile.write_all(halosource.as_bytes()).unwrap();
 
+    let stackmachine = include_str!("src/stackmachine.cu")
+        .to_string()
+        .replace("FIELD", &Fp::name());
+
     let source_builder = SourceBuilder::new()
         .add_fft::<Fp>()
         .add_fft::<Fq>()
-        .add_multiexp::<EpAffine, Fp>()
-        .add_multiexp::<EqAffine, Fq>()
-        .append_source(halosource);
+        //.add_multiexp::<EpAffine, Fp>()
+        //.add_multiexp::<EqAffine, Fq>()
+        //.append_source(halosource);
+        .append_source(stackmachine);
 
     ec_gpu_gen::generate(&source_builder);
 }

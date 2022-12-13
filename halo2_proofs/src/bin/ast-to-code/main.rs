@@ -982,31 +982,46 @@ fn run_stack_machine<F: FieldExt>(
                 stack.push(lhs * scalar);
             }
             &Instruction::Push { element } => {
+                //println!("Push {{ element: 0x{} }}", to_hex(&element));
                 stack.push(element);
             }
             &Instruction::LinearTerm { zeta_scalar } => {
                 stack.push(omega.pow_vartime(&[pos as u64]) * zeta_scalar);
+                //let linear_term = omega.pow_vartime(&[pos as u64]) * zeta_scalar;
+                //println!("LinearTerm: 0x{}", to_hex(&linear_term));
+                //stack.push(linear_term);
             }
             &Instruction::Rotated { index, rotation } => {
                 let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
+                //println!("rotated pos: {}", rotated_pos);
                 let index_usize = usize::try_from(index).expect("Platform must be >= 32-bit");
                 stack.push(polys[index_usize][rotated_pos]);
+                //let rotated = polys[index_usize][rotated_pos];
+                //println!("rotated: 0x{}", to_hex(&rotated));
+                //stack.push(rotated);
             }
         }
     }
     stack.pop().unwrap()
 }
-//// From https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8/42186553#42186553
-//unsafe fn to_bytes<T: Sized>(p: &T) -> &[u8] {
-//   slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>())
-//}
+// From https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8/42186553#42186553
+unsafe fn to_bytes<T: Sized>(p: &T) -> &[u8] {
+    slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>())
+}
+
+fn to_hex<T: Sized>(p: &T) -> String {
+    format!("{:02x?}", unsafe { to_bytes(p) })
+        .chars()
+        .filter(|cc| "[], ".find(*cc).is_none())
+        .collect()
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
         println!(
-            "Usage: {} <ast-file> <polys-file> <eval|gen|cuda|stacksrc|stackrust|stackmachinerust>",
+            "Usage: {} <ast-file> <polys-file> <eval|gen|cuda|stacksrc|stackrust|stackmachinerust|stackmachinecuda>",
             args[0]
         );
         process::exit(1);
@@ -1326,9 +1341,87 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
                 run_stack_machine(&stack_machine.instructions, &omega, &polys, poly_len, 0);
             println!("vmx: stackmachine: {:?}", result);
         }
+        "stackmachinecuda" => {
+            let stack_machine_rust =
+                ast_to_stack_machine_rust(&ast, &domain, &StackContext::default());
+            println!("vmx: stackmachine:");
+            //for (ii, instruction) in stack_machine.instructions.iter().enumerate() {
+            //   println!("{:?}", instruction);
+            //   //let mut outfile = File::create(format!("/tmp/instructions/{:0>5}.rs", ii)).unwrap();
+            //   //let bytes = instruction.to_bytes();
+            //   //outfile.write_all(&bytes).unwrap();
+            //}
+            let mut instructions = Vec::new();
+            for instruction in &stack_machine_rust.instructions {
+                let bytes = instruction.to_bytes();
+                instructions.write_all(&bytes).unwrap();
+            }
+            let omega = domain.get_extended_omega();
+
+            #[cfg(feature = "cuda")]
+            {
+                use ec_gpu_gen::rust_gpu_tools::{program_closures, Device, Program};
+                use ec_gpu_gen::EcResult;
+
+                // NOTE vmx 2022-10-23: This value is arbitrarily choosen.
+                const LOCAL_WORK_SIZE: usize = 128;
+
+                let devices = Device::all();
+                let device = devices.first().unwrap();
+                let program = ec_gpu_gen::program!(device).unwrap();
+
+                let closures = program_closures!(|program, _arg| -> EcResult<Vec<Fp>> {
+                    // All polynomials have the same length.
+                    //let poly_len = polys.first().unwrap().len();
+
+                    //let polys_bytes = polys_to_bytes(&polys);
+                    println!("vmx: polys bytes len: {:?}", polys_bytes.len());
+                    let polys_buffer = program.create_buffer_from_slice(&polys_bytes)?;
+                    //let mut polys_buffer = unsafe {
+                    //    program.create_buffer::<Fp>(&poly_len * polys.len())?
+                    //};
+                    //program.write_from_buffer(&mut polys_buffer, &polys);
+                    println!("vmx: instructions byte size: {}", instructions.len());
+                    let instructions_buffer = program.create_buffer_from_slice(&instructions)?;
+                    let omega_buffer =
+                        program.create_buffer_from_slice(unsafe { to_bytes(&omega) })?;
+
+                    //// It is safe as the GPU will initialize that buffer
+                    //let result_buffer = unsafe { program.create_buffer::<Fp>(poly_len)? };
+                    let result_buffer =
+                        program.create_buffer_from_slice(&vec![Fp::zero(); poly_len])?;
+
+                    // The global work size follows CUDA's definition and is the number of
+                    // `LOCAL_WORK_SIZE` sized thread groups.
+                    // NOTE vmx 2022-10-23: This value is arbitrarily choosen.
+                    let global_work_size = 1024;
+
+                    let kernel =
+                        program.create_kernel("evaluate", global_work_size, LOCAL_WORK_SIZE)?;
+
+                    kernel
+                        .arg(&polys_buffer)
+                        .arg(&(poly_len as u32))
+                        .arg(&instructions_buffer)
+                        .arg(&(stack_machine_rust.instructions.len() as u32))
+                        .arg(&(stack_machine_rust.max_stack_size as u32))
+                        .arg(&omega_buffer)
+                        .arg(&result_buffer)
+                        .run()?;
+
+                    let mut results = vec![Fp::zero(); poly_len];
+                    program.read_into_buffer(&result_buffer, &mut results)?;
+
+                    Ok(results)
+                });
+
+                let results = program.run(closures, ()).unwrap();
+                println!("result (stackmachine cuda): {:?}", results[0]);
+            }
+        }
         _ => {
             panic!(
-                "Unknown mode `{}`, use `eval`, `gen`, `cuda`, `stacksrc` `stackrust` or `stackmachinerust`",
+                "Unknown mode `{}`, use `eval`, `gen`, `cuda`, `stacksrc` `stackrust`, `stackmachinerust` or `stackmachinecuda`",
                 mode
             )
         }
