@@ -183,21 +183,21 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys, uint32_t poly_len, GLOBAL Instr
 // `poly_len` is the lengths of a single polynomial (all have the same length).
 //KERNEL void evaluate(GLOBAL FIELD polys[][POLY_LEN], GLOBAL FIELD* result, uint32_t poly_len) {
 //KERNEL void evaluate(GLOBAL FIELD polys[][], GLOBAL Instruction[] instructions, GLOBAL FIELD* omega, uint32_t poly_len, GLOBAL FIELD* result) {
-KERNEL void evaluate(GLOBAL FIELD *polys, uint32_t polys_len, GLOBAL Instruction* instructions, uint32_t num_instructions, uint32_t stack_size, GLOBAL FIELD* omega, GLOBAL FIELD* result) {
+KERNEL void evaluate(GLOBAL FIELD *polys, uint32_t poly_len, GLOBAL Instruction* instructions, uint32_t num_instructions, uint32_t stack_size, GLOBAL FIELD* omega, GLOBAL FIELD* result) {
     const uint32_t index = GET_GLOBAL_ID();
 
     if (index > 0) {
-        return;
+       return;
     }
 
     // TODO vmx 2022-10-22: Add the stride to common.cl in ec-gpu-gen and add an OpenCL version.
     const uint stride = blockDim.x * gridDim.x;
 
-    evaluate_at_pos(polys, polys_len, instructions, num_instructions, stack_size, omega, 0, &result[0]);
-    //for (uint32_t i = index; i < poly_len; i += stride) {
-    //   // TODO vmx 2022-11-11: check if this if statement is really needed.
-    //   if (i <= poly_len) {
-    //       evaluate_at_pos(polys, instructions, omega, poly_len, i, &result[i]);
-    //   }
-    //}
+    for (uint32_t pos = index; pos < poly_len; pos += stride) {
+      // TODO vmx 2022-11-11: check if this if statement is really needed.
+      if (pos <= poly_len) {
+        evaluate_at_pos(polys, poly_len, instructions, num_instructions,
+                        stack_size, omega, pos, &result[pos]);
+      }
+    }
 }
