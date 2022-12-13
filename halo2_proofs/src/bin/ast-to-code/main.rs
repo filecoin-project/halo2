@@ -194,7 +194,7 @@ fn get_of_rotated_pos(pos: usize, rotation: i32, poly_len: usize) -> usize {
     }
     // The position is at the end, the rotation is positive and so large, that it would lead to an
     // out of bounds error.
-    else if new_pos as usize > poly_len {
+    else if new_pos as usize >= poly_len {
         // Hence wrap around and use a position at the beginning of the polynomial.
         new_pos as usize - poly_len
     }
