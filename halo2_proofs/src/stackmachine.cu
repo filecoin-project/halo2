@@ -13,7 +13,6 @@ typedef struct {
 } Stack;
 
 DEVICE Stack stack_new(uint8_t capacity) {
-  // FIELD* items = (FIELD*)malloc(sizeof(FIELD*) * capacity);
   FIELD* items = (FIELD*)malloc(sizeof(FIELD) * capacity);
   // printf("vmx: sizeof(FIELD*): %d", sizeof(FIELD*));
   // printf("vmx: sizeof(FIELD**): %d", sizeof(FIELD**));
@@ -22,12 +21,13 @@ DEVICE Stack stack_new(uint8_t capacity) {
 }
 
 DEVICE void stack_push(Stack* stack, FIELD* item) {
-  // stack->items[stack->top] = *item;
+  //printf("vmx: stack: top before push: %d\n", stack->top);
   memcpy(&stack->items[stack->top], item, sizeof(FIELD));
   stack->top += 1;
 }
 
 DEVICE FIELD stack_pop(Stack* stack) {
+  //printf("vmx: stack: top before pop: %d\n", stack->top);
   FIELD item = stack->items[stack->top - 1];
   stack->top -= 1;
   return item;
@@ -110,7 +110,7 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
   // uint num_instructions = sizeof(instructions) / sizeof(Instruction);
   // printf("vmx: sizeof instructions: %llu\n", sizeof(instructions));
   // printf("vmx: sizeof Instruction: %llu\n", sizeof(Instruction));
-  printf("vmx: num_instructions: %d\n", num_instructions);
+  //printf("vmx: num_instructions: %d\n", num_instructions);
 
   // FIELD* stack = (FIELD *)malloc(sizeof(FIELD) * stack_size);
   // FIELD* stack = malloc(stack_size * sizeof *FIELD);
@@ -179,9 +179,9 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
         //  two-dimensional array as we don't know it's size at compile time,
         //  hence do some pointer arithmetic fun.
         FIELD* rotated = polys + (instruction.index * poly_len) + rotated_pos;
-        // printf("rotated: ");
-        // FIELD_print(*rotated);
-        // printf("\n");
+        //printf("rotated: ");
+        //FIELD_print(*rotated);
+        //printf("\n");
         stack_push(&stack, rotated);
         break;
       }
@@ -207,7 +207,10 @@ KERNEL void evaluate(GLOBAL FIELD* polys,
                      GLOBAL FIELD* result) {
   const uint32_t index = GET_GLOBAL_ID();
 
-  if (index > 0) {
+  if (index > 2833 || index < 0) {
+  //if (index < 1) {
+  //if (index != 2833) {
+  //if (index != 2833 && index != 0) {
     return;
   }
 
@@ -216,6 +219,7 @@ KERNEL void evaluate(GLOBAL FIELD* polys,
   const uint stride = blockDim.x * gridDim.x;
 
   for (uint32_t pos = index; pos < poly_len; pos += stride) {
+    //printf("vmx: pos: %d\n", pos);
     // TODO vmx 2022-11-11: check if this if statement is really needed.
     if (pos <= poly_len) {
       evaluate_at_pos(polys, poly_len, instructions, num_instructions,

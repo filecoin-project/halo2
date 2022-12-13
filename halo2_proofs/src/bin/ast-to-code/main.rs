@@ -995,10 +995,10 @@ fn run_stack_machine<F: FieldExt>(
                 let rotated_pos = get_of_rotated_pos(pos, rotation, poly_len);
                 //println!("rotated pos: {}", rotated_pos);
                 let index_usize = usize::try_from(index).expect("Platform must be >= 32-bit");
-                stack.push(polys[index_usize][rotated_pos]);
-                //let rotated = polys[index_usize][rotated_pos];
+                //stack.push(polys[index_usize][rotated_pos]);
+                let rotated = polys[index_usize][rotated_pos];
                 //println!("rotated: 0x{}", to_hex(&rotated));
-                //stack.push(rotated);
+                stack.push(rotated);
             }
         }
     }
@@ -1338,7 +1338,7 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
             let polys = bytes_to_polys(&polys_bytes, num_polys, poly_len);
             let omega = domain.get_extended_omega();
             let result =
-                run_stack_machine(&stack_machine.instructions, &omega, &polys, poly_len, 0);
+                run_stack_machine(&stack_machine.instructions, &omega, &polys, poly_len, 1);
             println!("vmx: stackmachine: {:?}", result);
         }
         "stackmachinecuda" => {
@@ -1416,7 +1416,8 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
                 });
 
                 let results = program.run(closures, ()).unwrap();
-                println!("result (stackmachine cuda): {:?}", results[0]);
+                //println!("result (stackmachine cuda): {:?}", results[0]);
+                println!("result (stackmachine cuda): {:?}", results[1]);
             }
         }
         _ => {
