@@ -1,41 +1,37 @@
 #include <stdint.h>
 #include <stdio.h>
 
-// One instruction is 40 bytes long.
-#define INSTRUCTION_SIZE 40
+// TODO vmx 2022-12-15: This is kind of a hack. We define a maximum stack size,
+// so that we don't need to allocate or manually use shared memory. The proper
+// solution would be to use shared memory instead and use the acccess pattern
+// as describeb in "Dynamic Indexing with Non-Uniform Access":
+// https://developer.nvidia.com/blog/fast-dynamic-indexing-private-arrays-cuda/
+#define MAX_STACK_SIZE 10
 
 typedef struct {
   uint8_t capacity;
   // Number of items pushed so far. Empty stack == 0.
   uint8_t top;
-  // FIELD** items;
-  FIELD* items;
+  FIELD items[MAX_STACK_SIZE];
 } Stack;
 
 DEVICE Stack stack_new(uint8_t capacity) {
-  FIELD* items = (FIELD*)malloc(sizeof(FIELD) * capacity);
-  // printf("vmx: sizeof(FIELD*): %d", sizeof(FIELD*));
-  // printf("vmx: sizeof(FIELD**): %d", sizeof(FIELD**));
-  Stack stack = {.capacity = capacity, .top = 0, .items = items};
+  assert(capacity <= MAX_STACK_SIZE);
+  Stack stack = {.capacity = capacity, .top = 0};
   return stack;
 }
 
 DEVICE void stack_push(Stack* stack, const FIELD item) {
-  // printf("vmx: stack: top before push: %d\n", stack->top);
-  // memcpy(&stack->items[stack->top], item, sizeof(FIELD));
+  assert(stack->top < stack->capacity);
   stack->items[stack->top] = item;
   stack->top += 1;
 }
 
 DEVICE FIELD stack_pop(Stack* stack) {
-  // printf("vmx: stack: top before pop: %d\n", stack->top);
-  FIELD item = stack->items[stack->top - 1];
+  assert(stack->top > 0);
+  FIELD item = stack->items[(stack->top - 1)];
   stack->top -= 1;
   return item;
-}
-
-DEVICE void stack_free(Stack* stack) {
-  free(stack->items);
 }
 
 typedef enum {
@@ -82,27 +78,35 @@ DEVICE void FIELD_print(FIELD a) {
   }
 }
 
-DEVICE uint get_rotated_pos(uint32_t pos, int32_t rotation, uint32_t poly_len) {
-  int32_t new_pos = pos + rotation;
+DEVICE uint32_t get_rotated_pos(uint32_t pos,
+                                int32_t rotation,
+                                uint32_t poly_len) {
+  // The relative position may be negative, it would then mean a position
+  // counted from the back.
+  int32_t rel_pos = pos + rotation;
+  uint32_t new_pos;
 
   // The position is at the beginning, the rotation is negative and so large,
   // that it would lead to an out of bounds error.
-  if (new_pos < 0) {
+  if (rel_pos < 0) {
     // Hence wrap around and use a position at the end of the polynomial.
-    return poly_len + new_pos;
+    new_pos = poly_len + rel_pos;
   }
   // The position is at the end, the rotation is positive and so large, that it
   // would lead to an out of bounds error.
-  else if (new_pos >= poly_len) {
+  else if (rel_pos >= poly_len) {
     // Hence wrap around and use a position at the beginning of the
     // polynomial.
-    return new_pos - poly_len;
+    new_pos = rel_pos - poly_len;
   }
   // It is outside those range, hence the rotation (being positive or negative)
   // won't lead to an out of bounds position.
   else {
-    return new_pos;
+    new_pos = rel_pos;
   }
+
+  assert(new_pos < poly_len);
+  return new_pos;
 }
 
 DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
@@ -113,31 +117,12 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
                             GLOBAL FIELD* omega,
                             uint32_t pos,
                             GLOBAL FIELD* result) {
-  // uint num_instructions = sizeof(instructions) / sizeof(Instruction);
-  // printf("vmx: sizeof instructions: %llu\n", sizeof(instructions));
-  // printf("vmx: sizeof Instruction: %llu\n", sizeof(Instruction));
-  // printf("vmx: num_instructions: %d\n", num_instructions);
-
-  // FIELD* stack = (FIELD *)malloc(sizeof(FIELD) * stack_size);
-  // FIELD* stack = malloc(stack_size * sizeof *FIELD);
   Stack stack = stack_new(stack_size);
 
-  // stack_push(&stack, omega);
-  // stack_pop(&stack);
-
-  // Make it a 2-dimensional array for easier indexing.
-  // FIELD (*polys)[poly_len] = polys;
-
-  // int (*pointer)[poly_len];
-  // printf("vmx: polys[1][2] with pointer access: %x", (*(*(&polys + 1) +
-  // 2)).val[0]); printf("vmx: polys[1][2] with index   access: %d",
-  // polys[1][2]);
-
-  for (uint i = 0; i < num_instructions; i++) {
+  for (int i = 0; i < num_instructions; i++) {
     Instruction instruction = instructions[i];
     switch (instruction.type) {
       case ADD: {
-        // printf("Add\n");
         const FIELD lhs = stack_pop(&stack);
         const FIELD rhs = stack_pop(&stack);
         const FIELD added = FIELD_add(lhs, rhs);
@@ -145,7 +130,6 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
         break;
       }
       case MUL: {
-        // printf("Mul\n");
         const FIELD lhs = stack_pop(&stack);
         const FIELD rhs = stack_pop(&stack);
         const FIELD multiplied = FIELD_mul(lhs, rhs);
@@ -153,44 +137,28 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
         break;
       }
       case SCALE: {
-        // printf("Scale { scalar: }\n");
         const FIELD lhs = stack_pop(&stack);
         const FIELD scaled = FIELD_mul(lhs, instruction.element);
         stack_push(&stack, scaled);
         break;
       }
       case PUSH: {
-        // printf("Push { element: ");
-        // FIELD_print(instruction.element);
-        // printf(" }\n");
         stack_push(&stack, instruction.element);
         break;
       }
       case LINEAR_TERM: {
-        // printf("LinearTerm\n");
-        // stack_push(&stack, &FIELD_mul(FIELD_pow(*omega, pos),
-        // instruction.element));
         const FIELD omega_pow = FIELD_pow(*omega, pos);
         const FIELD linear_term = FIELD_mul(omega_pow, instruction.element);
-        // printf("LinearTerm: ");
-        // FIELD_print(*linear_term);
-        // printf("\n");
         stack_push(&stack, linear_term);
         break;
       }
       case ROTATED: {
-        // printf("Rotated { index: %d, rotation: %d }\n",
-        // instruction.index, instruction.rotation);
         uint32_t rotated_pos =
             get_rotated_pos(pos, instruction.rotation, poly_len);
-        // printf("rotated pos: %d\n", rotated_pos);
         //  `polys` is a two-dimensional array, but we cannot use it as
         //  usual two-dimensional array as we don't know it's size at
         //  compile time, hence do some pointer arithmetic fun.
-        FIELD* rotated = polys + (instruction.index * poly_len) + rotated_pos;
-        // printf("rotated: ");
-        // FIELD_print(*rotated);
-        // printf("\n");
+        FIELD* rotated = &polys[(instruction.index * poly_len) + rotated_pos];
         stack_push(&stack, *rotated);
         break;
       }
@@ -200,7 +168,6 @@ DEVICE void evaluate_at_pos(GLOBAL FIELD* polys,
     }
   }
   *result = stack_pop(&stack);
-  stack_free(&stack);
 }
 
 // `poly_len` is the lengths of a single polynomial (all have the same length).
@@ -217,19 +184,11 @@ KERNEL void evaluate(GLOBAL FIELD* polys,
                      GLOBAL FIELD* result) {
   const uint32_t index = GET_GLOBAL_ID();
 
-  // if (index > 2833 || index < 0) {
-  //   // if (index < 1) {
-  //   // if (index != 2833) {
-  //   // if (index != 2833 && index != 0) {
-  //   return;
-  // }
-
   // TODO vmx 2022-10-22: Add the stride to common.cl in ec-gpu-gen and add an
   // OpenCL version.
   const uint stride = blockDim.x * gridDim.x;
 
-  for (uint32_t pos = index; pos < poly_len; pos += stride) {
-    // printf("vmx: pos: %d\n", pos);
+  for (int pos = index; pos < poly_len; pos += stride) {
     //  TODO vmx 2022-11-11: check if this if statement is really needed.
     if (pos <= poly_len) {
       evaluate_at_pos(polys, poly_len, instructions, num_instructions,

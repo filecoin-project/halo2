@@ -1416,7 +1416,7 @@ const fn get_of_rotated_pos(pos: usize, rotation_is_negative: bool, rotation_abs
                 });
 
                 let results = program.run(closures, ()).unwrap();
-                //println!("result (stackmachine cuda): {:?}", results[0]);
+                println!("result (stackmachine cuda): {:?}", results[0]);
                 println!("result (stackmachine cuda): {:?}", results[1]);
             }
         }
