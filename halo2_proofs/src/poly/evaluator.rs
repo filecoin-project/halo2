@@ -1,8 +1,11 @@
 use std::{
     cmp, fmt,
     hash::{Hash, Hasher},
+    io::Write,
     marker::PhantomData,
+    mem,
     ops::{Add, Mul, MulAssign, Neg, Sub},
+    slice,
     sync::Arc,
 };
 
@@ -169,6 +172,228 @@ fn get_of_rotated_pos<F: Field, B: Basis>(
 ////    }
 //}
 
+#[derive(Debug, Clone)]
+enum Instruction<F: FieldExt> {
+    /// Pops two elements, adds them and pushes the result.
+    Add,
+    /// Pops two elements, multiplies them and pushes the result.
+    Mul,
+    /// Pops one element, scales it and pushes the result.
+    Scale { scalar: F },
+    /// Pushes one element.
+    Push { element: F },
+    /// Does some calculations and pushes the result. The position and omega is passed into the
+    /// stack machine.
+    LinearTerm { zeta_scalar: F },
+    /// Pushes the field element at `[poly_index][result-of-the-call]`;
+    Rotated { index: u32, rotation: i32 },
+}
+
+fn fieldext_to_bytes<F: FieldExt>(element: &F) -> &[u8] {
+    debug_assert_eq!(mem::size_of::<F>(), 32);
+    unsafe { slice::from_raw_parts(element as *const F as *const u8, mem::size_of::<F>()) }
+}
+
+impl<F: FieldExt> Instruction<F> {
+    /// Converts the instruction into bytes that can be interpreted as a tagged union of structs in
+    /// C.
+    pub fn to_bytes(&self) -> [u8; 40] {
+        let mut bytes = [0; 40];
+        match self {
+            Self::Add => {
+                bytes[0] = 1;
+            }
+            Self::Mul => {
+                bytes[0] = 2;
+            }
+            Self::Scale { scalar } => {
+                bytes[0] = 3;
+                bytes[8..40].copy_from_slice(fieldext_to_bytes(scalar));
+            }
+            Self::Push { element } => {
+                bytes[0] = 4;
+                bytes[8..40].copy_from_slice(fieldext_to_bytes(element));
+            }
+            Self::LinearTerm { zeta_scalar } => {
+                bytes[0] = 5;
+                bytes[8..40].copy_from_slice(fieldext_to_bytes(zeta_scalar));
+            }
+            Self::Rotated { index, rotation } => {
+                bytes[0] = 6;
+                bytes[8..12].copy_from_slice(&index.to_le_bytes());
+                bytes[12..16].copy_from_slice(&rotation.to_le_bytes());
+            }
+        }
+        bytes
+    }
+}
+
+/// Contains the instructions and the maximum size of the stack.
+#[derive(Debug, Default)]
+struct StackContext<F: FieldExt> {
+    instructions: Vec<Instruction<F>>,
+    stack_size: usize,
+    max_stack_size: usize,
+}
+
+/// Traverse the AST and generate a stack machine in Rust that can be executed.
+fn ast_to_stack_machine<E, F: FieldExt + Serialize, B: BasisOps + Serialize>(
+    ast: &Ast<E, F, B>,
+    domain: &EvaluationDomain<F>,
+    ctx: &StackContext<F>,
+) -> StackContext<F> {
+    let mut instructions = Vec::new();
+    match ast {
+        Ast::Poly(leaf) => {
+            // Pushes the field element at `[poly_index][result-of-the-call]`;
+            let rotation = i32::try_from((1 << (domain.extended_k - domain.k)) * leaf.rotation.0)
+                .expect("Polynomial cannot have more then 2^31 coefficients");
+            instructions.push(Instruction::Rotated {
+                index: u32::try_from(leaf.index)
+                    .expect("Polynomial cannot have more then 2^32 coefficients"),
+                rotation,
+            });
+            let stack_size = ctx.stack_size + 1;
+            StackContext {
+                instructions,
+                stack_size,
+                max_stack_size: cmp::max(stack_size, ctx.max_stack_size),
+            }
+        }
+        Ast::Add(a, b) => {
+            let lhs = ast_to_stack_machine(a, domain, ctx);
+            let rhs = ast_to_stack_machine(b, domain, &lhs);
+            instructions.extend_from_slice(&lhs.instructions);
+            instructions.extend_from_slice(&rhs.instructions);
+            // Pops two elements, adds them and pushes the result.
+            instructions.push(Instruction::Add);
+            //let max_stack_size = cmp::max(lhs.max_stack_size, rhs.max_stack_size);
+            StackContext {
+                instructions,
+                stack_size: rhs.stack_size - 1,
+                max_stack_size: cmp::max(rhs.max_stack_size, ctx.max_stack_size),
+            }
+        }
+        Ast::Mul(AstMul(a, b)) => {
+            let lhs = ast_to_stack_machine(a, domain, ctx);
+            let rhs = ast_to_stack_machine(b, domain, &lhs);
+            instructions.extend_from_slice(&lhs.instructions);
+            instructions.extend_from_slice(&rhs.instructions);
+            // Pops two elements, multiplies them and pushes the result.
+            instructions.push(Instruction::Mul);
+            //let max_stack_size = cmp::max(lhs.max_stack_size, rhs.max_stack_size);
+            StackContext {
+                instructions,
+                stack_size: rhs.stack_size - 1,
+                max_stack_size: cmp::max(rhs.max_stack_size, ctx.max_stack_size),
+            }
+        }
+        Ast::Scale(a, scalar) => {
+            let lhs = ast_to_stack_machine(a, domain, ctx);
+            instructions.extend_from_slice(&lhs.instructions);
+            // Pops one element, scales it and pushes the result.
+            instructions.push(Instruction::Scale { scalar: *scalar });
+            StackContext {
+                instructions,
+                stack_size: lhs.stack_size,
+                max_stack_size: cmp::max(lhs.max_stack_size, ctx.max_stack_size),
+            }
+        }
+        // TODO vmx 2022-12-08: Think about moving this outside this function, as it really is the
+        // entry point and we won't match on it again. This might simplify the code a bit.
+        // This is the entry point of the AST.
+        Ast::DistributePowers(terms, base) => {
+            let mut max_stack_size = 0;
+            instructions.push(Instruction::Push { element: F::zero() });
+            for term in terms.iter() {
+                instructions.push(Instruction::Push { element: *base });
+                instructions.push(Instruction::Mul);
+                let term = ast_to_stack_machine(
+                    term,
+                    domain,
+                    &StackContext {
+                        instructions: Vec::new(),
+                        stack_size: 1,
+                        max_stack_size: 1,
+                    },
+                );
+                instructions.extend_from_slice(&term.instructions);
+                // Pushes one element, pops two elements, multiplies them and pushes the result.
+                // Pops two elements, adds then and pushes the result.
+                instructions.push(Instruction::Add);
+
+                // The stack contains a single element (the result) after processing a single term.
+                // Hence we can take whatever the maximum of all the runs was.
+                max_stack_size = cmp::max(max_stack_size, term.max_stack_size);
+            }
+            StackContext {
+                instructions,
+                stack_size: 1,
+                max_stack_size, //: cmp::max(max_stack_size, ctx.max_stack_size),
+            }
+        }
+        Ast::LinearTerm(scalar) => {
+            // NOTE vmx 2022-10-10: This is specific to ExtendedLagrangeCoeff, others work
+            // differently.
+            let zeta_scalar = F::ZETA * scalar;
+            // Does some calculations and pushes the result.
+            instructions.push(Instruction::LinearTerm { zeta_scalar });
+            let stack_size = ctx.stack_size + 1;
+            StackContext {
+                instructions,
+                stack_size,
+                max_stack_size: cmp::max(stack_size, ctx.max_stack_size),
+            }
+        }
+        Ast::ConstantTerm(scalar) => {
+            // Pushes one element.
+            instructions.push(Instruction::Push { element: *scalar });
+            let stack_size = ctx.stack_size + 1;
+            StackContext {
+                instructions,
+                stack_size,
+                max_stack_size: cmp::max(stack_size, ctx.max_stack_size),
+            }
+        }
+    }
+}
+
+/// Converts a list of polynomials (with the same size each) into a linear byte buffer).
+fn polys_to_bytes<F: Field, B: Basis>(polys: &[Polynomial<F, B>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+
+    let mut tmp_poly = Vec::new();
+    for poly in polys {
+        poly.write(&mut tmp_poly).unwrap();
+        // `write` prepends the length of the polynomial as 32-bit prefix. Strip that off.
+        bytes.extend_from_slice(&tmp_poly[4..]);
+        tmp_poly.clear();
+    }
+
+    bytes
+}
+
+// From https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8/42186553#42186553
+unsafe fn to_bytes<T: Sized>(p: &T) -> &[u8] {
+    slice::from_raw_parts((p as *const T) as *const u8, mem::size_of::<T>())
+}
+
+//// Converts a linear buffer of polynomials into a vector of `Polynomial`.
+//fn bytes_to_polys<E, F: Field, B: Basis> (
+//   bytes: &[u8],
+//   num_polys: usize,
+//   poly_len: usize,
+//) -> Vec<Polynomial<F, B>> {
+//   (0..num_polys)
+//       .map(|offset| {
+//           let start = offset * poly_len * mem::size_of::<F>();
+//           let end = (offset + 1) * poly_len * mem::size_of::<F>();
+//           let buffer = bytes[start..end].to_vec();
+//           Polynomial::<F, B>::from_bytes(buffer)
+//       })
+//       .collect()
+//}
+
 impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     /// Registers the given polynomial for use in this evaluation context.
     ///
@@ -186,6 +411,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     }
 
     /// Evaluates the given polynomial operation against this context.
+    #[cfg(not(any(feature = "cuda", feature = "opencl")))]
     pub fn evaluate(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
     where
         E: Copy + Send + Sync,
@@ -320,42 +546,42 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             }
         }
 
-        // Dump the AST
-        if matches!(ast, Ast::DistributePowers(_, _)) {
-            use std::io::Write;
-            let k = domain.k;
-            let j = domain.get_quotient_poly_degree() + 1;
-            let field =
-                std::any::type_name::<F>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
-            let basis =
-                std::any::type_name::<B>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
-            let time = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-
-            let mut ast_file = std::fs::File::create(format!(
-                "/tmp/halo2-{}-{}-{}-{}_{}.ast",
-                j, k, field, basis, time
-            ))
-            .unwrap();
-            let ast_bytes = bincode::serialize(&ast).expect("AST cannot be serialized");
-            ast_file.write_all(&ast_bytes).expect("write failed");
-
-            let mut polys_file = std::fs::File::create(format!(
-                "/tmp/halo2-{}-{}-{}-{}_{}.polys",
-                j, k, field, basis, time
-            ))
-            .unwrap();
-            // Prefix the poly file with the number of polynomials and the number of elements of
-            // the polynomials (they all have the same length).
-            let num_polys =
-                u32::try_from(self.polys.len()).expect("There are less then 2^32 polynomials");
-            polys_file.write_all(&num_polys.to_le_bytes()).unwrap();
-            let poly_len = u32::try_from(self.polys[0].len())
-                .expect("There are less then 2^32 elements in a polynomial");
-            polys_file.write_all(&poly_len.to_le_bytes()).unwrap();
-            for poly in &self.polys {
-                polys_file.write_all(poly.as_bytes()).unwrap();
-            }
-        }
+        //// Dump the AST
+        //if matches!(ast, Ast::DistributePowers(_, _)) {
+        //    use std::io::Write;
+        //    let k = domain.k;
+        //    let j = domain.get_quotient_poly_degree() + 1;
+        //    let field =
+        //        std::any::type_name::<F>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        //    let basis =
+        //        std::any::type_name::<B>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        //    let time = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        //
+        //    let mut ast_file = std::fs::File::create(format!(
+        //        "/tmp/halo2-{}-{}-{}-{}_{}.ast",
+        //        j, k, field, basis, time
+        //    ))
+        //    .unwrap();
+        //    let ast_bytes = bincode::serialize(&ast).expect("AST cannot be serialized");
+        //    ast_file.write_all(&ast_bytes).expect("write failed");
+        //
+        //    let mut polys_file = std::fs::File::create(format!(
+        //        "/tmp/halo2-{}-{}-{}-{}_{}.polys",
+        //        j, k, field, basis, time
+        //    ))
+        //    .unwrap();
+        //    // Prefix the poly file with the number of polynomials and the number of elements of
+        //    // the polynomials (they all have the same length).
+        //    let num_polys =
+        //        u32::try_from(self.polys.len()).expect("There are less then 2^32 polynomials");
+        //    polys_file.write_all(&num_polys.to_le_bytes()).unwrap();
+        //    let poly_len = u32::try_from(self.polys[0].len())
+        //        .expect("There are less then 2^32 elements in a polynomial");
+        //    polys_file.write_all(&poly_len.to_le_bytes()).unwrap();
+        //    for poly in &self.polys {
+        //        polys_file.write_all(poly.as_bytes()).unwrap();
+        //    }
+        //}
 
         log::trace!("vmx: halo2: poly: evalutator: evaluate: apply ast: start");
         // Apply `ast` to each chunk in parallel, writing the result into an output
@@ -392,6 +618,85 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         //result.copy_from_slice(&recurse(ast, &ctx));
         log::trace!("vmx: halo2: poly: evalutator: evaluate: apply ast: done");
         result
+    }
+
+    /// Evaluates the given polynomial operation against this context.
+    #[cfg(any(feature = "cuda", feature = "opencl"))]
+    pub fn evaluate(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
+    where
+        E: Copy + Send + Sync,
+        F: FieldExt + Serialize + DeserializeOwned,
+        B: BasisOps + Serialize + DeserializeOwned,
+    {
+        use ec_gpu_gen::rust_gpu_tools::{program_closures, Device, Program};
+        use ec_gpu_gen::EcResult;
+
+        log::trace!("vmx: halo2: poly: evalutator: evaluate: gpu: ast to stack machine");
+        let stack_machine_rust = ast_to_stack_machine(ast, domain, &StackContext::default());
+        log::trace!("vmx: halo2: poly: evalutator: evaluate: gpu: stack machine to bytes");
+        let mut instructions = Vec::new();
+        for instruction in &stack_machine_rust.instructions {
+            let bytes = instruction.to_bytes();
+            instructions.write_all(&bytes).unwrap();
+        }
+        let omega = domain.get_extended_omega();
+
+        // We're working in a single basis, so all polynomials are the same length.
+        let poly_len = self.polys.first().unwrap().len();
+
+        // NOTE vmx 2022-10-23: This value is arbitrarily choosen.
+        const LOCAL_WORK_SIZE: usize = 128;
+
+        let devices = Device::all();
+        let device = devices.first().unwrap();
+        let program = ec_gpu_gen::program!(device).unwrap();
+
+        let closures = program_closures!(|program, _arg| -> EcResult<Vec<F>> {
+            let polys_bytes = polys_to_bytes(&self.polys);
+            println!("vmx: polys bytes len: {:?}", polys_bytes.len());
+            let polys_buffer = program.create_buffer_from_slice(&polys_bytes)?;
+
+            println!("vmx: instructions byte size: {}", instructions.len());
+            let instructions_buffer = program.create_buffer_from_slice(&instructions)?;
+            let omega_buffer = program.create_buffer_from_slice(unsafe { to_bytes(&omega) })?;
+
+            //// It is safe as the GPU will initialize that buffer
+            let result_buffer = program.create_buffer_from_slice(&vec![F::zero(); poly_len])?;
+
+            // The global work size follows CUDA's definition and is the number of
+            // `LOCAL_WORK_SIZE` sized thread groups.
+            // NOTE vmx 2022-10-23: This value is arbitrarily choosen.
+            let global_work_size = 1024;
+
+            let kernel = program.create_kernel("evaluate", global_work_size, LOCAL_WORK_SIZE)?;
+
+            kernel
+                .arg(&polys_buffer)
+                .arg(&(poly_len as u32))
+                .arg(&instructions_buffer)
+                .arg(&(stack_machine_rust.instructions.len() as u32))
+                .arg(&(stack_machine_rust.max_stack_size as u32))
+                .arg(&omega_buffer)
+                .arg(&result_buffer)
+                .run()?;
+
+            let mut results = vec![F::zero(); poly_len];
+            //let mut results = vec![0; poly_len * mem::size_of::<F>()];
+            program.read_into_buffer(&result_buffer, &mut results)?;
+
+            Ok(results)
+        });
+
+        log::trace!("vmx: halo2: poly: evalutator: evaluate: gpu: start");
+        let result = program.run(closures, ()).unwrap();
+        //println!("result[0] gpu: {:?}", results[0]);
+        //println!("result[1] gpu: {:?}", results[1]);
+        let poly = Polynomial {
+            values: result,
+            _marker: PhantomData,
+        };
+        log::trace!("vmx: halo2: poly: evalutator: evaluate: gpu: done");
+        poly
     }
 }
 
