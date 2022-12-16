@@ -22,8 +22,8 @@ fn main() {
     let source_builder = SourceBuilder::new()
         .add_fft::<Fp>()
         .add_fft::<Fq>()
-        //.add_multiexp::<EpAffine, Fp>()
-        //.add_multiexp::<EqAffine, Fq>()
+        .add_multiexp::<EpAffine, Fp>()
+        .add_multiexp::<EqAffine, Fq>()
         //.append_source(halosource);
         .append_source(stackmachine);
 
