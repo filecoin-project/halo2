@@ -607,43 +607,43 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         // We're working in a single basis, so all polynomials are the same length.
         let poly_len = self.polys.first().unwrap().len();
 
-        // Dump the AST
-        if matches!(ast, Ast::DistributePowers(_, _)) {
-            let k = domain.k;
-            let j = domain.get_quotient_poly_degree() + 1;
-            let field =
-                std::any::type_name::<F>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
-            let basis =
-                std::any::type_name::<B>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
-            let time = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-
-            let mut ast_file = std::fs::File::create(format!(
-                "/tmp/halo2-{}-{}-{}-{}_{}.ast",
-                j, k, field, basis, time
-            ))
-            .unwrap();
-            let ast_bytes = bincode::serialize(&ast).expect("AST cannot be serialized");
-            ast_file.write_all(&ast_bytes).expect("write failed");
-
-            let mut polys_file = std::fs::File::create(format!(
-                "/tmp/halo2-{}-{}-{}-{}_{}.polys",
-                j, k, field, basis, time
-            ))
-            .unwrap();
-            // Prefix the poly file with the number of polynomials and the number of elements of
-            // the polynomials (they all have the same length).
-            let num_polys =
-                u32::try_from(self.polys.len()).expect("There are less then 2^32 polynomials");
-            polys_file.write_all(&num_polys.to_le_bytes()).unwrap();
-            let poly_len = u32::try_from(self.polys[0].len())
-                .expect("There are less then 2^32 elements in a polynomial");
-            polys_file.write_all(&poly_len.to_le_bytes()).unwrap();
-            for poly in &self.polys {
-                polys_file.write_all(poly.as_bytes()).unwrap();
-            }
-        } else {
-            log::trace!("vmx: not dumping the ast, because it's not a `DistributedPowers` one");
-        }
+        //// Dump the AST
+        //if matches!(ast, Ast::DistributePowers(_, _)) {
+        //    let k = domain.k;
+        //    let j = domain.get_quotient_poly_degree() + 1;
+        //    let field =
+        //        std::any::type_name::<F>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        //    let basis =
+        //        std::any::type_name::<B>().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        //    let time = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        //
+        //    let mut ast_file = std::fs::File::create(format!(
+        //        "/tmp/halo2-{}-{}-{}-{}_{}.ast",
+        //        j, k, field, basis, time
+        //    ))
+        //    .unwrap();
+        //    let ast_bytes = bincode::serialize(&ast).expect("AST cannot be serialized");
+        //    ast_file.write_all(&ast_bytes).expect("write failed");
+        //
+        //    let mut polys_file = std::fs::File::create(format!(
+        //        "/tmp/halo2-{}-{}-{}-{}_{}.polys",
+        //        j, k, field, basis, time
+        //    ))
+        //    .unwrap();
+        //    // Prefix the poly file with the number of polynomials and the number of elements of
+        //    // the polynomials (they all have the same length).
+        //    let num_polys =
+        //        u32::try_from(self.polys.len()).expect("There are less then 2^32 polynomials");
+        //    polys_file.write_all(&num_polys.to_le_bytes()).unwrap();
+        //    let poly_len = u32::try_from(self.polys[0].len())
+        //        .expect("There are less then 2^32 elements in a polynomial");
+        //    polys_file.write_all(&poly_len.to_le_bytes()).unwrap();
+        //    for poly in &self.polys {
+        //        polys_file.write_all(poly.as_bytes()).unwrap();
+        //    }
+        //} else {
+        //    log::trace!("vmx: not dumping the ast, because it's not a `DistributedPowers` one");
+        //}
 
         // NOTE vmx 2022-10-23: This value is arbitrarily choosen.
         const LOCAL_WORK_SIZE: usize = 128;
