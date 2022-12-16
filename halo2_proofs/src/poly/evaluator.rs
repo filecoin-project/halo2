@@ -417,6 +417,11 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         F: FieldExt + Serialize + DeserializeOwned,
         B: BasisOps + Serialize + DeserializeOwned,
     {
+        log::debug!(
+            "vmx: halo2: poly: evalutator: evaluate: num polys, polys len: {} {}",
+            self.polys.len(),
+            self.polys.first().unwrap().len()
+        );
         if matches!(ast, Ast::DistributePowers(_, _)) {
             log::trace!("vmx: halo2: poly: evalutator: evaluate: ast root is distribute powers");
             #[cfg(not(any(feature = "cuda", feature = "opencl")))]
@@ -443,7 +448,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         F: FieldExt + Serialize + DeserializeOwned,
         B: BasisOps + Serialize + DeserializeOwned,
     {
-        log::debug!("vmx: halo2: poly: evalutator: evaluate: ast: {:?}", ast);
+        //log::debug!("vmx: halo2: poly: evalutator: evaluate: ast: {:?}", ast);
         // We're working in a single basis, so all polynomials are the same length.
         let poly_len = self.polys.first().unwrap().len();
         let (chunk_size, _num_chunks) = get_chunk_params(poly_len);
