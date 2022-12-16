@@ -411,8 +411,33 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     }
 
     /// Evaluates the given polynomial operation against this context.
-    #[cfg(not(any(feature = "cuda", feature = "opencl")))]
     pub fn evaluate(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
+    where
+        E: Copy + Send + Sync,
+        F: FieldExt + Serialize + DeserializeOwned,
+        B: BasisOps + Serialize + DeserializeOwned,
+    {
+        if matches!(ast, Ast::DistributePowers(_, _)) {
+            log::trace!("vmx: halo2: poly: evalutator: evaluate: ast root is distribute powers");
+            #[cfg(not(any(feature = "cuda", feature = "opencl")))]
+            {
+                self.evaluate_cpu(ast, domain)
+            }
+            #[cfg(any(feature = "cuda", feature = "opencl"))]
+            {
+                self.evaluate_gpu(ast, domain)
+            }
+        } else {
+            log::trace!(
+                "vmx: halo2: poly: evalutator: evaluate: ast root is something else, hence use CPU"
+            );
+            self.evaluate_cpu(ast, domain)
+        }
+    }
+
+    /// Evaluates the given polynomial operation against this context.
+    //#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+    pub fn evaluate_cpu(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
     where
         E: Copy + Send + Sync,
         F: FieldExt + Serialize + DeserializeOwned,
@@ -585,7 +610,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
 
     /// Evaluates the given polynomial operation against this context.
     #[cfg(any(feature = "cuda", feature = "opencl"))]
-    pub fn evaluate(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
+    pub fn evaluate_gpu(&self, ast: &Ast<E, F, B>, domain: &EvaluationDomain<F>) -> Polynomial<F, B>
     where
         E: Copy + Send + Sync,
         F: FieldExt + Serialize + DeserializeOwned,
