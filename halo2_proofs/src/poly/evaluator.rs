@@ -422,21 +422,29 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             self.polys.len(),
             self.polys.first().unwrap().len()
         );
-        if matches!(ast, Ast::DistributePowers(_, _)) {
-            log::trace!("vmx: halo2: poly: evalutator: evaluate: ast root is distribute powers");
-            #[cfg(not(any(feature = "cuda", feature = "opencl")))]
-            {
-                self.evaluate_cpu(ast, domain)
-            }
-            #[cfg(any(feature = "cuda", feature = "opencl"))]
-            {
-                self.evaluate_gpu(ast, domain)
-            }
-        } else {
-            log::trace!(
-                "vmx: halo2: poly: evalutator: evaluate: ast root is something else, hence use CPU"
-            );
+        //if matches!(ast, Ast::DistributePowers(_, _)) {
+        //    log::trace!("vmx: halo2: poly: evalutator: evaluate: ast root is distribute powers");
+        //    #[cfg(not(any(feature = "cuda", feature = "opencl")))]
+        //    {
+        //        self.evaluate_cpu(ast, domain)
+        //    }
+        //    #[cfg(any(feature = "cuda", feature = "opencl"))]
+        //    {
+        //        self.evaluate_gpu(ast, domain)
+        //    }
+        //} else {
+        //    log::trace!(
+        //        "vmx: halo2: poly: evalutator: evaluate: ast root is something else, hence use CPU"
+        //    );
+        //    self.evaluate_cpu(ast, domain)
+        //}
+        #[cfg(not(any(feature = "cuda", feature = "opencl")))]
+        {
             self.evaluate_cpu(ast, domain)
+        }
+        #[cfg(any(feature = "cuda", feature = "opencl"))]
+        {
+            self.evaluate_gpu(ast, domain)
         }
     }
 
