@@ -438,14 +438,15 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         //    );
         //    self.evaluate_cpu(ast, domain)
         //}
-        #[cfg(not(any(feature = "cuda", feature = "opencl")))]
-        {
-            self.evaluate_cpu(ast, domain)
-        }
-        #[cfg(any(feature = "cuda", feature = "opencl"))]
-        {
-            self.evaluate_gpu(ast, domain)
-        }
+
+        //#[cfg(not(any(feature = "cuda", feature = "opencl")))]
+        //{
+        self.evaluate_cpu(ast, domain)
+        //}
+        //#[cfg(any(feature = "cuda", feature = "opencl"))]
+        //{
+        //    self.evaluate_gpu(ast, domain)
+        //}
     }
 
     /// Evaluates the given polynomial operation against this context.
