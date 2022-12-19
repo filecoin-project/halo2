@@ -370,6 +370,15 @@ fn polys_to_bytes<F: Field, B: Basis>(polys: &[Polynomial<F, B>]) -> Vec<u8> {
         tmp_poly.clear();
     }
 
+    // NOTE vmx 2022-12-19: let's find out if the polynomials are often the same. Perhaps we can
+    // load them on the GPU only once and re-use them between kernels.
+    log::trace!(
+        "vmx: polys_to_bytes: hash of the bytes: {:?}",
+        blake2b_simd::Params::new()
+            .to_state()
+            .update(&bytes)
+            .finalize()
+    );
     bytes
 }
 
