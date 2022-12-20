@@ -701,11 +701,12 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         let program = ec_gpu_gen::program!(device).unwrap();
 
         let closures = program_closures!(|program, _arg| -> EcResult<Vec<F>> {
+            log::trace!("vmx: polys bytes: start converting");
             let polys_bytes = polys_to_bytes(&self.polys);
-            println!("vmx: polys bytes len: {:?}", polys_bytes.len());
+            log::trace!("vmx: polys bytes len: {:?}", polys_bytes.len());
             let polys_buffer = program.create_buffer_from_slice(&polys_bytes)?;
 
-            println!("vmx: instructions byte size: {}", instructions.len());
+            log::trace!("vmx: instructions byte size: {}", instructions.len());
             let instructions_buffer = program.create_buffer_from_slice(&instructions)?;
             let omega_buffer = program.create_buffer_from_slice(unsafe { to_bytes(&omega) })?;
 
@@ -719,6 +720,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
 
             let kernel = program.create_kernel("evaluate", global_work_size, LOCAL_WORK_SIZE)?;
 
+            log::trace!("vmx: execute kernel");
             kernel
                 .arg(&polys_buffer)
                 .arg(&(poly_len as u32))
@@ -729,6 +731,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                 .arg(&result_buffer)
                 .run()?;
 
+            log::trace!("vmx: transfer gpu results");
             let mut results = vec![F::zero(); poly_len];
             //let mut results = vec![0; poly_len * mem::size_of::<F>()];
             program.read_into_buffer(&result_buffer, &mut results)?;
