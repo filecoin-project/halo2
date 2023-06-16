@@ -12,15 +12,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - name: Run tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --verbose --release --all --all-features
+        run: cargo test --verbose --release --all --all-features
+        shell: bash
 
   build:
     name: Build target ${{ matrix.target }}
@@ -33,17 +33,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - name: Add target
         run: rustup target add ${{ matrix.target }}
       - name: cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --features dev-graph,gadget-traces,unstable --target ${{ matrix.target }}
+        run: cargo build --features dev-graph,gadget-traces,unstable --target ${{ matrix.target }}
+        shell: bash
 
   bitrot:
     name: Bitrot check
@@ -51,30 +51,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       # Build benchmarks to prevent bitrot
       - name: Build benchmarks
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --benches --examples --all-features
+        run: cargo build --benches --examples --all-features
+        shell: bash
 
   book:
     name: Book tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - name: cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
+        run: cargo build
+        shell: bash
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v1
         with:
@@ -89,20 +90,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       # Use stable for this to ensure that cargo-tarpaulin can be built.
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-tarpaulin
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+        shell: bash
       - name: Generate coverage report
-        uses: actions-rs/cargo@v1
-        with:
-          command: tarpaulin
-          args: --all-features --timeout 600 --out Xml
+        run: cargo tarpaulin --all-features --timeout 600 --out Xml
+        shell: bash
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3.1.0
 
@@ -112,22 +106,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - name: cargo fetch
-        uses: actions-rs/cargo@v1
-        with:
-          command: fetch
-
+        run: cargo fetch
+        shell: bash
       # Ensure intra-documentation links all resolve correctly
       # Requires #![deny(intra_doc_link_resolution_failure)] in crates.
       - name: Check intra-doc links
-        uses: actions-rs/cargo@v1
-        with:
-          command: doc
-          args: --all --document-private-items
+        run: cargo doc --all --document-private-items
+        shell: bash
 
   fmt:
     name: Rustfmt
@@ -135,12 +127,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+      - run: cargo fmt --all -- --check
+        shell: bash

@@ -14,10 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - name: Run benchmark
         run: cargo bench -- --output-format bencher | tee output.txt
       - name: Store benchmark result

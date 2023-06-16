@@ -11,14 +11,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - id: rust
+        run: echo "toolchain=$(cat rust-toolchain)" >> $GITHUB_OUTPUT
+        shell: bash
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.56.1
-          components: clippy
-          override: true
+          toolchain: ${{ steps.rust.outputs.toolchain }}
       - name: Run clippy
-        uses: actions-rs/clippy-check@v1
-        with:
-          name: Clippy (1.56.1)
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features --all-targets -- -D warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
+        shell: bash
